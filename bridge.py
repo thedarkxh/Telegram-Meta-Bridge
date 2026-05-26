@@ -364,10 +364,27 @@ async def main():
     if clean_username:
         print(f"Performing startup check for missed posts in public channel @{clean_username}...")
         try:
-            url = f"https://t.me/s/{clean_username}"
-            res = requests.get(url, timeout=10)
-            if res.status_code == 200:
-                html = res.text
+            # Fallback list of endpoints to fetch the channel preview (bypasses ISP blocks)
+            endpoints = [
+                f"https://t.me/s/{clean_username}",
+                f"https://telegram.me/s/{clean_username}",
+                f"https://telegram.dog/s/{clean_username}",
+                f"https://api.allorigins.win/raw?url=https://t.me/s/{clean_username}"
+            ]
+            
+            html = None
+            for try_url in endpoints:
+                try:
+                    print(f"Trying to fetch missed posts from: {try_url}...")
+                    res = requests.get(try_url, timeout=7)
+                    if res.status_code == 200 and 'tgme_widget_message' in res.text:
+                        html = res.text
+                        print(f"Successfully retrieved channel preview!")
+                        break
+                except Exception as e:
+                    print(f"Could not connect to {try_url}: {e}")
+            
+            if html:
                 pattern = rf'data-post="{clean_username}/(\d+)"'
                 post_ids = sorted(list(set([int(x) for x in re.findall(pattern, html)])))
                 missed_pids = [pid for pid in post_ids if pid > last_id]
