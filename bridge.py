@@ -2,6 +2,25 @@ import os
 import requests
 from telethon import TelegramClient
 
+def load_dotenv():
+    """Loads environment variables from a local .env file if it exists."""
+    dotenv_path = '.env'
+    if os.path.exists(dotenv_path):
+        print("Loading configuration from local .env file...")
+        with open(dotenv_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if '=' in line:
+                    key, val = line.split('=', 1)
+                    key = key.strip()
+                    val = val.strip().strip("'").strip('"')
+                    os.environ[key] = val
+
+# Load local environment variables if available
+load_dotenv()
+
 # --- Configuration ---
 # Telegram API
 API_ID = os.getenv('TG_API_ID')
