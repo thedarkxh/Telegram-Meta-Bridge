@@ -6,11 +6,9 @@ import wave
 import math
 import struct
 import subprocess
-from telethon import TelegramClient, events
 from PIL import Image, ImageDraw, ImageFont
 
 def load_dotenv():
-    """Loads environment variables from a local .env file if it exists."""
     dotenv_path = '.env'
     if os.path.exists(dotenv_path):
         print("Loading configuration from local .env file...")
@@ -21,585 +19,290 @@ def load_dotenv():
                     continue
                 if '=' in line:
                     key, val = line.split('=', 1)
-                    key = key.strip()
-                    val = val.strip().strip("'").strip('"')
-                    os.environ[key] = val
+                    os.environ[key.strip()] = val.strip().strip("'").strip('"')
 
-# Load local environment variables if available
 load_dotenv()
 
-# --- Configuration ---
-# Telegram API
-API_ID = os.getenv('TG_API_ID')
-API_HASH = os.getenv('TG_API_HASH')
-BOT_TOKEN = os.getenv('TG_BOT_TOKEN')
-SOURCE_CHANNEL_RAW = os.getenv('TG_SOURCE_CHANNEL') # e.g., '@channelusername' or '-100123456789'
+IG_USERNAME = os.getenv('IG_USERNAME')
+IG_PASSWORD = os.getenv('IG_PASSWORD')
+SOURCE_CHANNEL_RAW = os.getenv('TG_SOURCE_CHANNEL')
 
-# Parse SOURCE_CHANNEL: clean up spaces/quotes and convert to integer/valid username format
 SOURCE_CHANNEL = None
 if SOURCE_CHANNEL_RAW:
-    # Strip any accidental leading/trailing spaces or quotes (very common in GitHub Secrets)
-    cleaned_channel = SOURCE_CHANNEL_RAW.strip().strip("'").strip('"')
-    try:
-        SOURCE_CHANNEL = int(cleaned_channel)
-    except ValueError:
-        # If it's a username but doesn't start with '@', and is not a URL, auto-prepend '@'
-        if not cleaned_channel.startswith('@') and not cleaned_channel.startswith('http') and not '/' in cleaned_channel:
-            SOURCE_CHANNEL = f"@{cleaned_channel}"
-            print(f"Username cleaned: Auto-prepended '@' -> {SOURCE_CHANNEL}")
-        else:
-            SOURCE_CHANNEL = cleaned_channel
+    cleaned = SOURCE_CHANNEL_RAW.strip().strip("'").strip('"')
+    if not cleaned.startswith('@') and not cleaned.startswith('http') and '/' not in cleaned:
+        SOURCE_CHANNEL = cleaned
+    else:
+        SOURCE_CHANNEL = cleaned.lstrip('@').split('/')[-1]
 
-# Meta (FB/IG) API
-FB_PAGE_ID = os.getenv('FB_PAGE_ID')
-IG_USER_ID = os.getenv('IG_USER_ID')
-FB_ACCESS_TOKEN = os.getenv('FB_ACCESS_TOKEN')
-
-# State management (to avoid duplicates)
 STATE_FILE = 'last_msg_id.txt'
 
+from instagrapi import Client
+ig_client = None
+
+def get_ig_client():
+    global ig_client
+    if ig_client is not None:
+        return ig_client
+    
+    print(f"Logging into Instagram as {IG_USERNAME}...")
+    ig_client = Client()
+    try:
+        ig_client.login(IG_USERNAME, IG_PASSWORD)
+        print("✅ Instagram login successful!")
+        return ig_client
+    except Exception as e:
+        print(f"❌ Instagram login failed: {e}")
+        ig_client = None
+        return None
+
 def get_last_processed_id():
-    """Reads the last processed message ID. Returns 0 if not found or corrupted."""
     if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, 'r') as f:
-                content = f.read().strip()
-                if content:
-                    return int(content)
-        except ValueError:
-            print("Warning: State file was empty or corrupted. Defaulting to 0.")
+        try: return int(open(STATE_FILE).read().strip())
+        except ValueError: pass
     return 0
 
 def set_last_processed_id(msg_id):
-    """Writes the last processed message ID to the state file."""
-    with open(STATE_FILE, 'w') as f:
-        f.write(str(msg_id))
+    with open(STATE_FILE, 'w') as f: f.write(str(msg_id))
 
-def generate_news_intro_sound(output_path="news_intro.wav"):
-    """
-    Generates a professional, rhythmic 'Breaking News' electronic chime/beep 
-    intro sound effect (WAV format) using pure Python built-in math/wave.
-    """
+def create_news_video(image_path, output_path="news_post.mp4"):
     try:
-        print(f"Generating synthetic breaking news chimes to {output_path}...")
-        sample_rate = 44100
-        duration = 5.0  # 5 seconds
-        num_samples = int(sample_rate * duration)
-        
-        wav_file = wave.open(output_path, 'w')
-        wav_file.setparams((1, 2, sample_rate, num_samples, 'NONE', 'not compressed'))
-        
-        # Rhythmic beep pattern (frequency, duration_ms, pause_ms)
-        pattern = [
-            (880, 150, 100),  # beep 1
-            (880, 150, 100),  # beep 2
-            (880, 150, 100),  # beep 3
-            (1046, 250, 150), # beep 4 (higher pitch)
-            (880, 150, 100),  # beep 5
-            (880, 150, 100),  # beep 6
-            (1046, 250, 150), # beep 7
-            (523, 1000, 0),   # Sustained low dramatic base chime (C5)
-            (659, 1000, 0),   # Sustained mid harmony (E5)
-            (784, 1500, 0)    # Sustained high harmony (G5)
-        ]
-        
-        audio_data = []
-        for freq, dur_ms, pause_ms in pattern:
-            beep_samples = int(sample_rate * (dur_ms / 1000.0))
-            pause_samples = int(sample_rate * (pause_ms / 1000.0))
-            
-            for i in range(beep_samples):
-                envelope = 1.0
-                fade_width = int(beep_samples * 0.1)
-                if i < fade_width:
-                    envelope = i / fade_width
-                elif i > beep_samples - fade_width:
-                    envelope = (beep_samples - i) / fade_width
-                    
-                t = i / sample_rate
-                value = math.sin(2 * math.pi * freq * t) * envelope * 0.5
-                sample = int(value * 32767)
-                audio_data.append(struct.pack('<h', sample))
-                
-            for _ in range(pause_samples):
-                audio_data.append(struct.pack('<h', 0))
-                
-        while len(audio_data) < num_samples:
-            audio_data.append(struct.pack('<h', 0))
-            
-        wav_file.writeframes(b"".join(audio_data[:num_samples]))
-        wav_file.close()
-        print("Breaking News chimes generated successfully!")
-        return output_path
-    except Exception as e:
-        print(f"Failed to generate synthetic audio: {e}")
-        return None
-
-def create_news_video_with_audio(image_path, audio_path, output_video_path="news_post.mp4"):
-    """
-    Uses FFmpeg to merge the edited news image and the generated audio 
-    into a high-definition 5-second MP4 video loop.
-    """
-    try:
-        print(f"FFmpeg: Merging {image_path} and {audio_path} into video {output_video_path}...")
-        if os.path.exists(output_video_path):
-            os.remove(output_video_path)
-            
+        print(f"Compiling silent video for Instagram Reels...")
+        if os.path.exists(output_path): os.remove(output_path)
         cmd = [
-            'ffmpeg', '-y',
-            '-loop', '1', '-i', image_path,
-            '-i', audio_path,
-            '-c:v', 'libx264',
-            '-tune', 'stillimage',
-            '-c:a', 'aac',
-            '-b:a', '192k',
+            'ffmpeg', '-y', '-loop', '1', '-i', image_path,
+            '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+            '-c:v', 'libx264', '-tune', 'stillimage',
+            '-c:a', 'aac', '-b:a', '128k',
             '-pix_fmt', 'yuv420p',
-            '-shortest',
-            output_video_path
+            '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2',
+            '-shortest', '-t', '5', output_path
         ]
-        
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if result.returncode == 0:
-            print(f"Successfully generated news video: {output_video_path}")
-            return output_video_path
-        else:
-            print(f"FFmpeg failed with exit code {result.returncode}. Error: {result.stderr.decode()}")
-            return None
-    except Exception as e:
-        print(f"Failed to compile video with FFmpeg: {e}")
-        return None
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        return output_path if r.returncode == 0 else None
+    except Exception: return None
 
-def post_to_facebook(message, video_path=None):
-    """Posts a video with custom news chimes background music natively to Facebook Page."""
+def post_to_instagram(message, video_path, img_path):
+    print(f"📤 Uploading video to Instagram...")
     try:
-        if video_path and os.path.exists(video_path):
-            print(f"Uploading news video {video_path} to Facebook...")
-            url = f"https://graph.facebook.com/{FB_PAGE_ID}/videos"
-            payload = {
-                'description': message, # Video posts use 'description' instead of 'caption' or 'message'
-                'access_token': FB_ACCESS_TOKEN
-            }
-            with open(video_path, 'rb') as f:
-                files = {'source': f}
-                res = requests.post(url, data=payload, files=files)
-        else:
-            print("Skipping Facebook: No video provided (text-only posts are disabled by user).")
-            return None
-        
-        res_json = res.json()
-        if 'error' in res_json:
-            print(f"Facebook API Error: {res_json['error'].get('message')} (Code: {res_json['error'].get('code')})")
-        else:
-            print(f"Successfully posted video to Facebook! ID: {res_json.get('id')}")
-        return res_json
-    except Exception as e:
-        print(f"Failed to post video to Facebook: {e}")
-        return {"error": str(e)}
-
-def post_to_instagram(message, image_url):
-    """Posts an image via a public URL to Instagram Business account (2-step process)."""
-    if not image_url:
-        print("Skipping Instagram: Instagram API strictly requires a public image URL.")
-        return None
-
-    # Step 1: Create Media Container
-    print(f"Step 1: Creating Instagram media container for {image_url}...")
-    container_url = f"https://graph.facebook.com/v18.0/{IG_USER_ID}/media"
-    payload = {
-        'image_url': image_url,
-        'caption': message,
-        'access_token': FB_ACCESS_TOKEN
-    }
-    
-    try:
-        res = requests.post(container_url, data=payload)
-        data = res.json()
-        
-        if 'error' in data:
-            print(f"Instagram Container Error: {data['error'].get('message')} (Code: {data['error'].get('code')})")
-            return data
-        
-        if 'id' in data:
-            creation_id = data['id']
-            # Step 2: Publish Container
-            print("Step 2: Publishing Instagram media container...")
-            publish_url = f"https://graph.facebook.com/v18.0/{IG_USER_ID}/media_publish"
-            publish_payload = {
-                'creation_id': creation_id,
-                'access_token': FB_ACCESS_TOKEN
-            }
-            res_pub = requests.post(publish_url, data=publish_payload)
-            data_pub = res_pub.json()
+        client = get_ig_client()
+        if not client: return None
             
-            if 'error' in data_pub:
-                print(f"Instagram Publish Error: {data_pub['error'].get('message')} (Code: {data_pub['error'].get('code')})")
-            else:
-                print(f"Successfully posted to Instagram! Media ID: {data_pub.get('id')}")
-            return data_pub
+        media = client.clip_upload(video_path, message, thumbnail=img_path)
+        print(f"✅ Posted to Instagram! ID: {media.id}")
+        return media
     except Exception as e:
-        print(f"Failed to post to Instagram due to exception: {e}")
-        return {"error": str(e)}
-    return None
-
-def get_font(font_type='bold', size=24):
-    """Safely loads a clean system font, falling back to default."""
-    font_paths = []
-    if font_type == 'bold':
-        font_paths = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-            "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-            "/usr/share/fonts/truetype/msttcorefonts/Arial_Bold.ttf"
-        ]
-    else:
-        font_paths = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-            "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf"
-        ]
-        
-    for path in font_paths:
-        if os.path.exists(path):
-            try:
-                return ImageFont.truetype(path, size)
-            except Exception:
-                continue
-    try:
-        return ImageFont.load_default()
-    except Exception:
+        print(f"❌ Instagram upload error: {e}")
         return None
+
+def get_font(size=24):
+    for p in ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"]:
+        if os.path.exists(p): return ImageFont.truetype(p, size)
+    return ImageFont.load_default()
+
+def create_default_bg(output_path="default_bg.jpg"):
+    w, h = 1080, 1920
+    img = Image.new('RGB', (w, h))
+    draw = ImageDraw.Draw(img)
+    # Professional dark blue gradient
+    for y in range(h):
+        r, g, b = int(15 + (y/h)*20), int(25 + (y/h)*30), int(45 + (y/h)*50)
+        draw.line([(0, y), (w, y)], fill=(r, g, b))
+    img.save(output_path, quality=95)
+    return output_path
 
 def apply_news_template(image_path, text):
-    """
-    Applies a professional, branded news template (BBC style) to the local image.
-    Adds a dark gradient overlay at the bottom, a red branded banner, and overlays 
-    the post text as a clean white headline.
-    """
     try:
-        print(f"Applying branded news template to {image_path}...")
-        img = Image.open(image_path)
+        img = Image.open(image_path).convert('RGBA')
         
-        # Convert to RGBA for drawing overlays
-        if img.mode != 'RGBA':
-            img = img.convert('RGBA')
-            
-        width, height = img.size
+        # Resize/crop to 1080x1920 (Reel format) without squishing
+        target_w, target_h = 1080, 1920
+        img_ratio = img.width / img.height
+        target_ratio = target_w / target_h
         
-        # If the image is extremely large, resize it to a maximum of 1200px to speed up drawing
-        max_dim = 1200
-        if width > max_dim or height > max_dim:
-            img.thumbnail((max_dim, max_dim))
-            width, height = img.size
+        if img_ratio > target_ratio:
+            # Image is wider, scale by height
+            new_h = target_h
+            new_w = int(new_h * img_ratio)
+        else:
+            # Image is taller or equal, scale by width
+            new_w = target_w
+            new_h = int(new_w / img_ratio)
             
-        # Create a drawing layer
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+        
+        # Center crop
+        left = (new_w - target_w) / 2
+        top = (new_h - target_h) / 2
+        right = (new_w + target_w) / 2
+        bottom = (new_h + target_h) / 2
+        img = img.crop((left, top, right, bottom))
+        
+        w, h = target_w, target_h
+        
+        # Bottom gradient covering 45% of height for text readability
+        ov_h = int(h * 0.45)
+        overlay = Image.new('RGBA', (w, ov_h), (0,0,0,0))
+        od = ImageDraw.Draw(overlay)
+        for y in range(ov_h):
+            alpha = int((y / ov_h) * 240)
+            od.line([(0, y), (w, y)], fill=(0,0,0,alpha))
+        img.alpha_composite(overlay, dest=(0, h - ov_h))
         draw = ImageDraw.Draw(img)
         
-        # 1. Add a semi-transparent dark gradient overlay at the bottom (30% height)
-        overlay_height = int(height * 0.30)
-        overlay = Image.new('RGBA', (width, overlay_height), (0, 0, 0, 0))
-        overlay_draw = ImageDraw.Draw(overlay)
-        for y in range(overlay_height):
-            # Gradient alpha from 0 to 220
-            alpha = int((y / overlay_height) * 220)
-            overlay_draw.line([(0, y), (width, y)], fill=(0, 0, 0, alpha))
+        # Red banner
+        RED = (186, 12, 47, 255)
+        by = h - ov_h + 40
+        draw.rectangle([0, by, 300, by + 50], fill=RED)
+        draw.text((30, by + 10), "BREAKING NEWS", fill=(255,255,255,255), font=get_font(32))
         
-        # Paste the overlay onto the image
-        img.alpha_composite(overlay, dest=(0, height - overlay_height))
-        
-        # Re-get draw context for the composite image
-        draw = ImageDraw.Draw(img)
-        
-        # 2. Add a red branded tab at the bottom-left (BBC Style)
-        # Red: RGB (186, 12, 47)
-        red_color = (186, 12, 47, 255)
-        tab_width = int(width * 0.22)
-        tab_height = int(height * 0.055)
-        if tab_width < 100: tab_width = 100
-        if tab_height < 30: tab_height = 30
-        
-        tab_y_start = height - overlay_height - tab_height
-        draw.rectangle([15, tab_y_start, 15 + tab_width, height - overlay_height], fill=red_color)
-        
-        # Draw "BREAKING" or "UPDATE" text inside the red tab
-        font_size_tab = int(tab_height * 0.55)
-        if font_size_tab < 12: font_size_tab = 12
-        font_tab = get_font('bold', font_size_tab)
-        
-        text_tab = "UPDATE"
-        draw.text((25, tab_y_start + int(tab_height * 0.2)), text_tab, fill=(255, 255, 255, 255), font=font_tab)
-        
-        # 3. Draw the headline text at the bottom
-        # Clean text: remove links or extreme characters
-        clean_text_lines = []
-        for word in text.split():
-            if not word.startswith("http") and not word.startswith("@"):
-                clean_text_lines.append(word)
-        clean_headline = " ".join(clean_text_lines)[:120]  # Limit to 120 chars for overlay
-        if not clean_headline.strip():
-            clean_headline = "News Update!"
-            
-        # Wrap text to fit the image width
-        font_size_text = int(height * 0.045)
-        if font_size_text < 16: font_size_text = 16
-        if font_size_text > 36: font_size_text = 36
-        font_text = get_font('bold', font_size_text)
-        
-        # Simple wrapping
-        wrapped_text = ""
-        max_chars_per_line = int(width / (font_size_text * 0.65))
-        if max_chars_per_line < 15: max_chars_per_line = 15
-        words = clean_headline.split()
-        current_line = []
-        for word in words:
-            if len(" ".join(current_line + [word])) <= max_chars_per_line:
-                current_line.append(word)
+        # Headline text wrapping
+        clean = " ".join(w for w in text.split() if not w.startswith("http") and not w.startswith("@"))[:200] or "News Update"
+        font_hl = get_font(42)
+        lines, cur = [], []
+        for word in clean.split():
+            test = " ".join(cur + [word])
+            try: tw = draw.textlength(test, font=font_hl)
+            except: tw = len(test) * 22
+            if tw <= (w - 80): cur.append(word)
             else:
-                wrapped_text += " ".join(current_line) + "\n"
-                current_line = [word]
-        wrapped_text += " ".join(current_line)
+                if cur: lines.append(" ".join(cur))
+                cur = [word]
+        if cur: lines.append(" ".join(cur))
+        final = "\n".join(lines[:4])
         
-        # Keep only the first 2-3 lines of text
-        lines = wrapped_text.split('\n')[:3]
-        final_text = "\n".join(lines)
+        ty = by + 70
+        draw.text((42, ty + 2), final, fill=(0,0,0,200), font=font_hl)
+        draw.text((40, ty), final, fill=(255,255,255,255), font=font_hl)
         
-        # Draw text with shadow for readability
-        x, y = 20, height - overlay_height + 15
-        
-        # Draw shadow
-        draw.text((x + 2, y + 2), final_text, fill=(0, 0, 0, 255), font=font_text)
-        # Draw white text
-        draw.text((x, y), final_text, fill=(255, 255, 255, 255), font=font_text)
-        
-        # Save back as JPEG
-        final_img = img.convert('RGB')
-        edited_path = f"edited_{os.path.basename(image_path)}"
-        final_img.save(edited_path, 'JPEG', quality=95)
-        print(f"Branded news image saved successfully to {edited_path}")
-        return edited_path
-    except Exception as e:
-        print(f"Failed to apply news template to image: {e}")
-        return image_path  # Fallback to original image if editing fails
+        out = f"edited_{os.path.basename(image_path)}"
+        img.convert('RGB').save(out, 'JPEG', quality=95)
+        return out
+    except Exception: return image_path
 
-def extract_post_data(html, username, post_id):
-    """Extracts text and photo URL for a specific post_id from the scraped HTML."""
-    try:
-        start_tag = f'data-post="{username}/{post_id}"'
-        if start_tag not in html:
-            return "News Update!", None
-            
-        idx = html.find(start_tag)
-        block = html[idx:idx+15000] # Get large chunk containing the post HTML
-        
-        # Extract text
-        text = "News Update!"
-        text_start = block.find('class="tgme_widget_message_text')
-        if text_start != -1:
-            tag_end = block.find('>', text_start)
-            div_end = block.find('</div>', tag_end)
-            raw_text = block[tag_end+1:div_end]
-            text = re.sub('<[^<]+?>', '', raw_text).strip()
-            
-        # Extract photo URL
-        photo_url = None
-        photo_start = block.find('class="tgme_widget_message_photo_wrap"')
-        if photo_start != -1:
-            style_idx = block.find('style="background-image:url(', photo_start)
-            if style_idx != -1:
-                url_start = style_idx + len('style="background-image:url(')
-                quote = block[url_start]
-                if quote in ["'", '"']:
-                    url_end = block.find(quote, url_start + 1)
-                    photo_url = block[url_start+1:url_end]
-                else:
-                    url_end = block.find(')', url_start)
-                    photo_url = block[url_start:url_end]
-                    
-        return text, photo_url
-    except Exception as e:
-        print(f"Error parsing post {post_id} details: {e}")
-        return "News Update!", None
-
-async def main():
-    if not all([API_ID, API_HASH, BOT_TOKEN, SOURCE_CHANNEL]):
-        print("Error: Missing Telegram configuration environment variables.")
-        return
-
-    client = TelegramClient('bridge_session', API_ID, API_HASH)
-    await client.start(bot_token=BOT_TOKEN)
+def get_recent_posts(username, last_id, hours_back=24):
+    from datetime import datetime, timezone, timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours_back)
     
-    # Get latest messages from channel (handle clean/empty session cache)
-    try:
-        entity = await client.get_entity(SOURCE_CHANNEL)
-    except ValueError as e:
-        print(f"\n[Error] Could not find the channel in your session cache: {e}")
-        print("💡 Why this happens: Telegram bots are restricted from listing their chats (they cannot call get_dialogs).")
-        print("💡 How to fix this in your .env file:")
-        print("  - OPTION A (Public Channel): Set TG_SOURCE_CHANNEL to the public username (e.g., @my_channel_username).")
-        print("  - OPTION B (Private Channel): Set TG_SOURCE_CHANNEL to your channel's invite link (e.g., https://t.me/+AbCdEf12345).")
-        print("    (This will automatically resolve the access hash and cache the channel into your local session!)")
-        print("  - OPTION C (Persistent ID): Once the session cache has populated via OPTION B at least once,")
-        print("    you can safely change it back to the integer ID (like -1003892228063) and it will work forever.\n")
-        await client.disconnect()
-        return
+    all_posts = {}
+    current_url = f"https://telegram.me/s/{username}"
+    pages_fetched = 0
     
-    last_id = get_last_processed_id()
-    print(f"Resuming bridge. Last processed message ID from memory: {last_id}")
-    print(f"Successfully connected to channel: {entity.title} (ID: {entity.id})")
-    
-    # --- Startup Missed Posts Recovery (Scrapes web preview to bypass bot restrictions) ---
-    clean_username = None
-    if isinstance(SOURCE_CHANNEL, str) and SOURCE_CHANNEL.startswith('@'):
-        clean_username = SOURCE_CHANNEL[1:]
-    elif isinstance(SOURCE_CHANNEL, str) and not SOURCE_CHANNEL.startswith('http') and not '/' in SOURCE_CHANNEL:
-        clean_username = SOURCE_CHANNEL
-        
-    if clean_username:
-        print(f"Performing startup check for missed posts in public channel @{clean_username}...")
+    while pages_fetched < 50: # Safety limit
+        pages_fetched += 1
         try:
-            # Fallback list of endpoints to fetch the channel preview (bypasses ISP blocks)
-            endpoints = [
-                f"https://t.me/s/{clean_username}",
-                f"https://telegram.me/s/{clean_username}",
-                f"https://telegram.dog/s/{clean_username}",
-                f"https://api.allorigins.win/raw?url=https://t.me/s/{clean_username}"
-            ]
+            r = requests.get(current_url, timeout=10)
+            if r.status_code != 200: break
+            html = r.text
+        except: break
             
-            html = None
-            for try_url in endpoints:
-                try:
-                    print(f"Trying to fetch missed posts from: {try_url}...")
-                    res = requests.get(try_url, timeout=7)
-                    if res.status_code == 200 and 'tgme_widget_message' in res.text:
-                        html = res.text
-                        print(f"Successfully retrieved channel preview!")
-                        break
-                except Exception as e:
-                    print(f"Could not connect to {try_url}: {e}")
+        blocks = html.split('<div class="tgme_widget_message text_not_supported_wrap js-widget_message"')[1:]
+        if not blocks: blocks = html.split('tgme_widget_message ')[1:]
+        if not blocks: break
+        
+        oldest_dt = datetime.now(timezone.utc)
+        min_pid = float('inf')
+        
+        for block in blocks:
+            m = re.search(r'data-post="[^/]+/(\d+)"', block)
+            if not m: continue
+            pid = int(m.group(1))
+            min_pid = min(min_pid, pid)
+            if pid <= last_id: continue
             
-            if html:
-                pattern = rf'data-post="{clean_username}/(\d+)"'
-                post_ids = sorted(list(set([int(x) for x in re.findall(pattern, html)])))
-                missed_pids = [pid for pid in post_ids if pid > last_id]
+            # Extract time
+            post_time = datetime.now(timezone.utc)
+            tm = re.search(r'<time[^>]+datetime="([^"]+)"', block)
+            if tm:
+                try: post_time = datetime.fromisoformat(tm.group(1).replace('Z', '+00:00'))
+                except: pass
+            
+            oldest_dt = min(oldest_dt, post_time)
+            if post_time < cutoff: continue
                 
-                if missed_pids:
-                    print(f"Found {len(missed_pids)} missed posts. Bridging them now...")
-                    for pid in missed_pids:
-                        text, photo_url = extract_post_data(html, clean_username, pid)
-                        image_path = None
-                        image_path_to_post = None
+            # Extract text
+            text = "News Update"
+            ts = block.find('class="tgme_widget_message_text')
+            if ts != -1:
+                te = block.find('>', ts)
+                de = block.find('</div>', te)
+                if te != -1 and de != -1:
+                    raw = block[te + 1: de]
+                    raw = raw.replace('<br>', ' ').replace('<br/>', ' ')
+                    text = re.sub(r'<[^<]+?>', '', raw).strip()
+                    
+            # Extract photo
+            photo_url = None
+            ps = block.find('tgme_widget_message_photo_wrap')
+            if ps != -1:
+                pm = re.search(r"background-image:url\('([^']+)'\)", block[ps:ps+1000])
+                if pm: photo_url = pm.group(1)
+                
+            all_posts[pid] = (pid, text, photo_url)
+            
+        if oldest_dt < cutoff or min_pid <= last_id or min_pid == float('inf'):
+            break
+            
+        current_url = f"https://telegram.me/s/{username}?before={min_pid}"
+        time.sleep(1)
+        
+    return sorted(list(all_posts.values()), key=lambda x: x[0])
+
+def process_and_post(image_path, text, msg_id):
+    try:
+        edited = apply_news_template(image_path, text)
+        video = create_news_video(edited, f"news_video_{msg_id}.mp4")
+        success = False
+        if video:
+            res = post_to_instagram(text, video, edited)
+            success = res is not None
+        return success
+    finally:
+        for fp in [f"edited_{os.path.basename(image_path)}", f"news_video_{msg_id}.mp4", image_path]:
+            if fp and os.path.exists(fp) and "default_bg" not in fp:
+                try: os.remove(fp)
+                except: pass
+
+def main():
+    if not IG_USERNAME or not IG_PASSWORD or not SOURCE_CHANNEL:
+        print("❌ Missing config in .env. Check IG_USERNAME, IG_PASSWORD, TG_SOURCE_CHANNEL.")
+        return
+        
+    last_id = get_last_processed_id()
+    print(f"\n{'='*55}\n  📡 Bridge active — monitoring: @{SOURCE_CHANNEL}\n  💾 Resuming from ID: {last_id}\n{'='*55}\n")
+    
+    while True:
+        try:
+            new_posts = get_recent_posts(SOURCE_CHANNEL, last_id)
+            if new_posts:
+                print(f"\n📬 Found {len(new_posts)} new post(s)!")
+                for pid, text, photo_url in new_posts:
+                    print(f"  ⏭ Processing post #{pid}...")
+                    img_path = "default_bg.jpg"
+                    
+                    if photo_url:
+                        try:
+                            r = requests.get(photo_url, timeout=15)
+                            if r.status_code == 200:
+                                img_path = f"temp_{pid}.jpg"
+                                with open(img_path, 'wb') as f: f.write(r.content)
+                        except: pass
+                    else:
+                        print(f"  ℹ️ No photo in post #{pid}. Generating default News background.")
+                        create_default_bg(img_path)
                         
-                        # Download photo if exists
-                        if photo_url:
-                            try:
-                                print(f"Downloading missed post photo from {photo_url}...")
-                                img_res = requests.get(photo_url, timeout=15)
-                                if img_res.status_code == 200:
-                                    image_path = f"temp_missed_{pid}.jpg"
-                                    with open(image_path, 'wb') as f:
-                                        f.write(img_res.content)
-                                    # Apply Pillow Branded News Template!
-                                    image_path_to_post = apply_news_template(image_path, text)
-                            except Exception as e:
-                                print(f"Failed to download missed post photo: {e}")
-                                image_path_to_post = image_path
-                                
-                        print(f"Bridging missed post {pid}...")
-                        post_to_facebook(text, image_path_to_post)
+                    success = process_and_post(img_path, text, pid)
+                    if not success:
+                        print(f"  ❌ Post #{pid} failed (likely token expiration). Will retry next cycle.")
+                        break # Stop processing to avoid skipping posts
                         
-                        # Check for Instagram public image link
-                        ig_url = None
-                        if "http" in text and (".jpg" in text or ".png" in text or ".jpeg" in text):
-                            for word in text.split():
-                                if word.startswith("http") and any(ext in word for ext in [".jpg", ".png", ".jpeg"]):
-                                    ig_url = word
-                                    break
-                        if ig_url:
-                            post_to_instagram(text, ig_url)
-                            
-                        # Cleanup local files
-                        if image_path and os.path.exists(image_path):
-                            try: os.remove(image_path)
-                            except: pass
-                        if image_path_to_post and image_path_to_post != image_path and os.path.exists(image_path_to_post):
-                            try: os.remove(image_path_to_post)
-                            except: pass
-                            
-                        last_id = pid
-                        set_last_processed_id(last_id)
-                    print("Missed posts recovery complete!")
-                else:
-                    print("No missed posts found since last processed message.")
+                    last_id = pid
+                    set_last_processed_id(last_id)
+                    print(f"  ✅ Finished post #{pid} (Memory updated: {last_id})")
         except Exception as e:
-            print(f"Missed posts recovery skipped due to error: {e}")
-    # -------------------------------------------------------------------------------------
-
-    print("Real-time News Bridge is active and listening for new messages...")
-
-    @client.on(events.NewMessage(chats=entity))
-    async def handler(event):
-        nonlocal last_id
-        msg = event.message
-        
-        # Memory Check: skip duplicates or older posts
-        if msg.id <= last_id:
-            return
+            print(f"Polling error: {e}")
             
-        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received new channel message {msg.id}: {msg.text[:50] if msg.text else '(No Text)'}...")
-        
-        text = msg.text if msg.text else "News Update!"
-        image_path = None
-        image_path_to_post = None
-        
-        # Download photo locally if attached
-        if msg.photo:
-            try:
-                print("Downloading photo attachment...")
-                image_path = await client.download_media(msg.photo)
-                print(f"Attachment saved to {image_path}")
-                # Apply Pillow Branded News Template!
-                image_path_to_post = apply_news_template(image_path, text)
-            except Exception as e:
-                print(f"Failed to download Telegram media: {e}")
-                image_path_to_post = image_path
-        
-        print("Bridging message...")
-        
-        # 1. Post to Facebook (supports local photos uploaded natively)
-        post_to_facebook(text, image_path_to_post)
-        
-        # 2. Post to Instagram (Only if there is a public image URL in the text, since Meta requires it)
-        image_url = None
-        if "http" in text and (".jpg" in text or ".png" in text or ".jpeg" in text):
-            for word in text.split():
-                if word.startswith("http") and any(ext in word for ext in [".jpg", ".png", ".jpeg"]):
-                    image_url = word
-                    break
-        
-        if image_url:
-            post_to_instagram(text, image_url)
-            
-        # Update memory state
-        last_id = msg.id
-        set_last_processed_id(last_id)
-        print(f"Saved progress to memory. Last processed message ID updated to: {last_id}")
-        
-        # Cleanup downloaded file to prevent local storage pollution
-        if image_path and os.path.exists(image_path):
-            try:
-                os.remove(image_path)
-                print(f"Removed temporary local photo: {image_path}")
-            except Exception as e:
-                print(f"Could not clean up temporary photo {image_path}: {e}")
-        if image_path_to_post and image_path_to_post != image_path and os.path.exists(image_path_to_post):
-            try:
-                os.remove(image_path_to_post)
-                print(f"Removed temporary edited photo: {image_path_to_post}")
-            except Exception as e:
-                print(f"Could not clean up temporary edited photo {image_path_to_post}: {e}")
-
-    await client.run_until_disconnected()
+        time.sleep(30)
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
