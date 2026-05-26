@@ -1,6 +1,11 @@
 name: Social News Bridge
 
 on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'last_msg_id.txt'
   schedule:
     - cron: '*/30 * * * *' # Run every 30 minutes
   workflow_dispatch: # Allow manual trigger
@@ -8,9 +13,16 @@ on:
 jobs:
   bridge:
     runs-on: ubuntu-latest
+    
+    # Explicitly grant write permissions so the workflow can commit the state file
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true # Crucial for push step to use the workflow's write permission
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -37,5 +49,5 @@ jobs:
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
           git add last_msg_id.txt
-          git commit -m "Update last processed message ID" || echo "No changes to commit"
+          git commit -m "Update last processed message ID [skip ci]" || echo "No changes to commit"
           git push
