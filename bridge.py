@@ -315,14 +315,21 @@ def get_recent_posts(username, last_id, hours_back=24):
             oldest_dt = min(oldest_dt, post_time)
             if post_time < cutoff: continue
                 
-            # Extract text
+            # Extract text and story link
             text = "News Update"
+            story_url = None
             ts = block.find('class="tgme_widget_message_text')
             if ts != -1:
                 te = block.find('>', ts)
                 de = block.find('</div>', te)
                 if te != -1 and de != -1:
                     raw = block[te + 1: de]
+                    # Extract the first link that is not a telegram join channel link
+                    url_match = re.search(r'href="([^"]+)"', raw)
+                    if url_match:
+                        url_val = url_match.group(1)
+                        if "t.me" not in url_val and "telegram.me" not in url_val:
+                            story_url = url_val
                     raw = raw.replace('<br>', ' ').replace('<br/>', ' ')
                     text = re.sub(r'<[^<]+?>', '', raw).strip()
                     
@@ -333,7 +340,7 @@ def get_recent_posts(username, last_id, hours_back=24):
                 pm = re.search(r"background-image:url\('([^']+)'\)", block[ps:ps+1000])
                 if pm: photo_url = pm.group(1)
                 
-            all_posts[pid] = (pid, text, photo_url)
+            all_posts[pid] = (pid, text, photo_url, story_url)
             
         if oldest_dt < cutoff or min_pid <= last_id or min_pid == float('inf'):
             break
@@ -343,12 +350,16 @@ def get_recent_posts(username, last_id, hours_back=24):
         
     return sorted(list(all_posts.values()), key=lambda x: x[0])
 
-def clean_and_format_caption(text):
+def clean_and_format_caption(text, story_url=None):
     if not text:
-        return "News Update\n\n#news #breakingnews #globalnews #worldnews"
+        return "Teds Mordare Official News Update | @tedsxh\n\n#news #breakingnews #globalnews #worldnews #tedsmordare"
         
     lines = text.split('\n')
     cleaned_lines = []
+    
+    # Custom intro credit branding block at the top
+    intro = "📡 Teds Mordare Official News Update | @tedsxh 📡\n"
+    cleaned_lines.append(intro)
     
     for line in lines:
         line = line.strip()
@@ -375,20 +386,30 @@ def clean_and_format_caption(text):
     # Remove consecutive empty lines (max 1 empty line)
     raw_caption = re.sub(r'\n{3,}', '\n\n', raw_caption).strip()
     
-    # Add a lively call-to-action to double engagement rates!
-    lively_prompt = "\n\nWhat are your thoughts on this? Share in the comments below! 👇💬✨"
+    # Add clickable story link information if present
+    link_section = ""
+    if story_url:
+        link_section = f"\n\n🔗 FULL STORY LINK (Copy & paste or check bio):\n👉 {story_url}"
+    else:
+        link_section = "\n\n🔗 Full story link available in bio!"
+        
+    # Custom lively branding/engagement footer
+    footer = (
+        "\n\n💬 What are your thoughts on this update? Let us know in the comments below! 👇"
+        "\n\n🔔 Stay connected with the truth! Follow Teds Mordare Official on Telegram: @tedsxh"
+    )
     
     # Append premium professional hashtags
-    hashtags = "\n\n#news #breakingnews #globalnews #worldnews #newsupdate #currentaffairs #trending"
-    return raw_caption + lively_prompt + hashtags
+    hashtags = "\n\n#news #breakingnews #globalnews #worldnews #newsupdate #currentaffairs #trending #tedsmordare"
+    return raw_caption + link_section + footer + hashtags
 
-def process_and_post(image_path, text, msg_id):
+def process_and_post(image_path, text, msg_id, story_url=None):
     try:
         edited = apply_news_template(image_path, text)
         video = create_news_video(edited, f"news_video_{msg_id}.mp4")
         success = False
         if video:
-            formatted_caption = clean_and_format_caption(text)
+            formatted_caption = clean_and_format_caption(text, story_url)
             res = post_to_instagram(formatted_caption, video, edited)
             success = res is not None
         return success
@@ -411,7 +432,7 @@ def main():
             new_posts = get_recent_posts(SOURCE_CHANNEL, last_id)
             if new_posts:
                 print(f"\n📬 Found {len(new_posts)} new post(s)!")
-                for pid, text, photo_url in new_posts:
+                for pid, text, photo_url, story_url in new_posts:
                     print(f"  ⏭ Processing post #{pid}...")
                     img_path = "default_bg.jpg"
                     
@@ -426,7 +447,7 @@ def main():
                         print(f"  ℹ️ No photo in post #{pid}. Generating default News background.")
                         create_default_bg(img_path)
                         
-                    success = process_and_post(img_path, text, pid)
+                    success = process_and_post(img_path, text, pid, story_url)
                     if not success:
                         print(f"  ❌ Post #{pid} failed (likely token expiration). Will retry next cycle.")
                         break # Stop processing to avoid skipping posts
