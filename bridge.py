@@ -276,13 +276,50 @@ def get_recent_posts(username, last_id, hours_back=24):
         
     return sorted(list(all_posts.values()), key=lambda x: x[0])
 
+def clean_and_format_caption(text):
+    if not text:
+        return "News Update\n\n#news #breakingnews #globalnews #worldnews"
+        
+    lines = text.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            cleaned_lines.append("")
+            continue
+            
+        # Remove lines that only contain raw URLs or promotional prompts
+        if "READ FULL STORY" in line or "read full story" in line.lower():
+            continue
+        if "join teds mordare" in line.lower() or "t.me/" in line.lower():
+            continue
+            
+        # Clean up any residual raw HTTP URLs from the caption text to avoid messy text
+        words = line.split()
+        cleaned_words = [w for w in words if not w.startswith("http://") and not w.startswith("https://")]
+        cleaned_line = " ".join(cleaned_words)
+        
+        if cleaned_line:
+            cleaned_lines.append(cleaned_line)
+            
+    # Reconstruct the caption with elegant spacing
+    raw_caption = "\n".join(cleaned_lines)
+    # Remove consecutive empty lines (max 1 empty line)
+    raw_caption = re.sub(r'\n{3,}', '\n\n', raw_caption).strip()
+    
+    # Append premium professional hashtags
+    hashtags = "\n\n#news #breakingnews #globalnews #worldnews #newsupdate #currentaffairs"
+    return raw_caption + hashtags
+
 def process_and_post(image_path, text, msg_id):
     try:
         edited = apply_news_template(image_path, text)
         video = create_news_video(edited, f"news_video_{msg_id}.mp4")
         success = False
         if video:
-            res = post_to_instagram(text, video, edited)
+            formatted_caption = clean_and_format_caption(text)
+            res = post_to_instagram(formatted_caption, video, edited)
             success = res is not None
         return success
     finally:
