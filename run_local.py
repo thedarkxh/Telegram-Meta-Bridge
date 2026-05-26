@@ -9,8 +9,10 @@ try:
     while True:
         print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Triggering bridge...")
         
-        # Run bridge.py as a subprocess
-        result = subprocess.run([sys.executable, 'bridge.py'])
+        # Use virtual environment's isolated python if it exists, fallback to sys.executable
+        import os
+        python_bin = './venv/bin/python' if os.path.exists('./venv/bin/python') else sys.executable
+        result = subprocess.run([python_bin, 'bridge.py'])
         if result.returncode == 0:
             print("Bridge run completed successfully.")
         else:
