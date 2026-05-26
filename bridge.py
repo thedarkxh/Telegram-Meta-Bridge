@@ -173,28 +173,36 @@ def apply_news_template(image_path, text):
         overlay = Image.new('RGBA', (target_w, target_h), (0, 0, 0, 130))
         canvas.alpha_composite(overlay)
         
-        # 2. Fit the uncropped original sharp image on top
-        max_w, max_h = 1000, 1100
-        scale_w = max_w / w_orig
-        scale_h = max_h / h_orig
-        scale_factor = min(scale_w, scale_h)
-        
-        sharp_w = int(w_orig * scale_factor)
-        sharp_h = int(h_orig * scale_factor)
-        
+        # 2. Fit the uncropped original sharp image on top (Touch borders horizontally if landscape/square)
+        if img_ratio >= target_ratio:
+            # Image is landscape or square. Touch horizontal borders!
+            sharp_w = target_w
+            sharp_h = int(sharp_w / img_ratio)
+            paste_x = 0
+            paste_y = int(120 + (1100 - sharp_h) / 2)
+        else:
+            # Image is portrait/vertical. Fit it vertically within safe region.
+            sharp_h = 1100
+            sharp_w = int(sharp_h * img_ratio)
+            paste_x = int((target_w - sharp_w) / 2)
+            paste_y = 120
+            
         sharp_img = original_img.resize((sharp_w, sharp_h), Image.LANCZOS)
         
-        paste_x = int((target_w - sharp_w) / 2)
-        paste_y = int(120 + (1100 - sharp_h) / 2)
-        
-        # Draw a sharp 2px outline around the centered original image
+        # Draw sleek borders for full-width band or a box border for vertical images
         border_layer = Image.new('RGBA', (target_w, target_h), (0, 0, 0, 0))
         border_draw = ImageDraw.Draw(border_layer)
-        border_draw.rectangle(
-            [paste_x - 2, paste_y - 2, paste_x + sharp_w + 2, paste_y + sharp_h + 2],
-            outline=(255, 255, 255, 180),
-            width=2
-        )
+        if paste_x == 0:
+            # Draw professional top/bottom border separator lines
+            border_draw.line([(0, paste_y - 2), (target_w, paste_y - 2)], fill=(255, 255, 255, 140), width=2)
+            border_draw.line([(0, paste_y + sharp_h + 1), (target_w, paste_y + sharp_h + 1)], fill=(255, 255, 255, 140), width=2)
+        else:
+            # Draw outline border around centered tall image
+            border_draw.rectangle(
+                [paste_x - 2, paste_y - 2, paste_x + sharp_w + 2, paste_y + sharp_h + 2],
+                outline=(255, 255, 255, 180),
+                width=2
+            )
         canvas.alpha_composite(border_layer)
         canvas.alpha_composite(sharp_img, dest=(paste_x, paste_y))
         
