@@ -9,13 +9,20 @@ API_HASH = os.getenv('TG_API_HASH')
 BOT_TOKEN = os.getenv('TG_BOT_TOKEN')
 SOURCE_CHANNEL_RAW = os.getenv('TG_SOURCE_CHANNEL') # e.g., '@channelusername' or '-100123456789'
 
-# Parse SOURCE_CHANNEL: convert to integer if it represents one (Telethon needs int for channel IDs)
+# Parse SOURCE_CHANNEL: clean up spaces/quotes and convert to integer/valid username format
 SOURCE_CHANNEL = None
 if SOURCE_CHANNEL_RAW:
+    # Strip any accidental leading/trailing spaces or quotes (very common in GitHub Secrets)
+    cleaned_channel = SOURCE_CHANNEL_RAW.strip().strip("'").strip('"')
     try:
-        SOURCE_CHANNEL = int(SOURCE_CHANNEL_RAW)
+        SOURCE_CHANNEL = int(cleaned_channel)
     except ValueError:
-        SOURCE_CHANNEL = SOURCE_CHANNEL_RAW
+        # If it's a username but doesn't start with '@', and is not a URL, auto-prepend '@'
+        if not cleaned_channel.startswith('@') and not cleaned_channel.startswith('http') and not '/' in cleaned_channel:
+            SOURCE_CHANNEL = f"@{cleaned_channel}"
+            print(f"Username cleaned: Auto-prepended '@' -> {SOURCE_CHANNEL}")
+        else:
+            SOURCE_CHANNEL = cleaned_channel
 
 # Meta (FB/IG) API
 FB_PAGE_ID = os.getenv('FB_PAGE_ID')
