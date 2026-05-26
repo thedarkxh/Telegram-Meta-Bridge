@@ -1,24 +1,31 @@
-import time
 import subprocess
+import os
 import sys
+import time
 
-print("Local Bridge Scheduler started. Running bridge.py every 30 minutes...")
+print("=" * 60)
+print("  Telegram to Meta Real-Time News Bridge - Local Manager")
+print("=" * 60)
+print("This script will keep the bridge running persistently in the background.")
+print("If the bridge crashes or loses connection, it will automatically restart.")
 print("Press Ctrl+C to stop.")
+print("-" * 60)
+
+python_bin = './venv/bin/python' if os.path.exists('./venv/bin/python') else sys.executable
 
 try:
     while True:
-        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Triggering bridge...")
+        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Starting Real-time Bridge...")
         
-        # Use virtual environment's isolated python if it exists, fallback to sys.executable
-        import os
-        python_bin = './venv/bin/python' if os.path.exists('./venv/bin/python') else sys.executable
-        result = subprocess.run([python_bin, 'bridge.py'])
-        if result.returncode == 0:
-            print("Bridge run completed successfully.")
+        # Run bridge.py persistently
+        process = subprocess.run([python_bin, 'bridge.py'])
+        
+        if process.returncode == 0:
+            print("Bridge stopped cleanly.")
+            break
         else:
-            print(f"Bridge run failed with exit code {result.returncode}.")
-            
-        print("Sleeping for 30 minutes...")
-        time.sleep(1800) # 1800 seconds = 30 minutes
+            print(f"\n[Warning] Bridge process exited with code {process.returncode}.")
+            print("Restarting bridge in 10 seconds... (Press Ctrl+C to abort)")
+            time.sleep(10)
 except KeyboardInterrupt:
-    print("\nScheduler stopped.")
+    print("\nLocal Manager stopped by user.")
