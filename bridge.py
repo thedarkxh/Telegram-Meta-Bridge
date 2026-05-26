@@ -156,13 +156,20 @@ async def main():
     last_id = get_last_processed_id()
     print(f"Resuming bridge. Last processed message ID: {last_id}")
     
-    # Get latest messages from channel (handle empty session cache on fresh runners)
+    # Get latest messages from channel (handle clean/empty session cache)
     try:
         entity = await client.get_entity(SOURCE_CHANNEL)
     except ValueError as e:
-        print(f"Channel not found in empty session cache ({e}). Fetching active dialogs to populate...")
-        await client.get_dialogs()
-        entity = await client.get_entity(SOURCE_CHANNEL)
+        print(f"\n[Error] Could not find the channel in your session cache: {e}")
+        print("💡 Why this happens: Telegram bots are restricted from listing their chats (they cannot call get_dialogs).")
+        print("💡 How to fix this in your .env file:")
+        print("  - OPTION A (Public Channel): Set TG_SOURCE_CHANNEL to the public username (e.g., @my_channel_username).")
+        print("  - OPTION B (Private Channel): Set TG_SOURCE_CHANNEL to your channel's invite link (e.g., https://t.me/+AbCdEf12345).")
+        print("    (This will automatically resolve the access hash and cache the channel into your local session!)")
+        print("  - OPTION C (Persistent ID): Once the session cache has populated via OPTION B at least once,")
+        print("    you can safely change it back to the integer ID (like -1003892228063) and it will work forever.\n")
+        await client.disconnect()
+        return
     
     print(f"Successfully connected to channel: {entity.title} (ID: {entity.id})")
     messages = await client.get_messages(entity, limit=10)
