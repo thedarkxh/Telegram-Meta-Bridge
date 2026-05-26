@@ -6,7 +6,7 @@ import wave
 import math
 import struct
 import subprocess
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 def load_dotenv():
     dotenv_path = '.env'
@@ -88,31 +88,29 @@ def post_to_instagram(message, video_path, img_path):
         client = get_ig_client()
         if not client: return None
         
-        # Try to fetch and attach trending music
         media = None
         try:
-            print("🎵 Fetching trending Reels music...")
-            res = client.music_trending(product="reels_audio")
-            items = res.get("items", []) if res else []
-            if items:
-                track_dict = items[0]["track"]
-                track_id = track_dict.get("id") or track_dict.get("audio_cluster_id")
-                print(f"🔥 Found trending track: '{track_dict.get('title')}' by {track_dict.get('display_artist')} (ID: {track_id})")
-                
-                track_obj = client.track_info_by_id(track_id)
-                print("📤 Uploading Reel with trending music track...")
-                media = client.clip_upload_as_reel_with_music(
+            print("🎵 Searching for calming lofi music...")
+            tracks = client.search_music("calming lofi")
+            if tracks:
+                track = tracks[0]
+                print(f"🔥 Selected calming track: '{track.title}' by {track.display_artist} (ID: {track.id})")
+                print("📤 Uploading Reel with calming music track...")
+                media = client.clip_upload_with_music(
                     path=video_path,
                     caption=message,
-                    track=track_obj
+                    track=track,
+                    thumbnail=img_path,
+                    music_volume=1.0,
+                    original_volume=0.0
                 )
-                print(f"✅ Posted to Instagram with trending music! ID: {media.id}")
+                print(f"✅ Posted to Instagram with calming music! ID: {media.id}")
             else:
-                print("ℹ️ No trending music items returned by Instagram API.")
+                print("ℹ️ No calming music tracks found. Falling back to standard upload...")
         except Exception as music_err:
-            print(f"⚠️ Could not attach trending music ({music_err}). Falling back to silent upload...")
+            print(f"⚠️ Could not attach calming music ({music_err}). Falling back to silent upload...")
             
-        # Fallback to standard Reel upload if trending music upload was not successful
+        # Fallback to standard Reel upload if music upload was not successful
         if not media:
             print("📤 Uploading standard silent Reel...")
             media = client.clip_upload(video_path, message, thumbnail=img_path)
@@ -141,72 +139,127 @@ def create_default_bg(output_path="default_bg.jpg"):
 
 def apply_news_template(image_path, text):
     try:
-        img = Image.open(image_path).convert('RGBA')
+        original_img = Image.open(image_path).convert('RGBA')
+        w_orig, h_orig = original_img.size
         
-        # Resize/crop to 1080x1920 (Reel format) without squishing
         target_w, target_h = 1080, 1920
-        img_ratio = img.width / img.height
+        img_ratio = w_orig / h_orig
         target_ratio = target_w / target_h
         
+        # 1. Create blurred background canvas covering 1080x1920
         if img_ratio > target_ratio:
-            # Image is wider, scale by height
-            new_h = target_h
-            new_w = int(new_h * img_ratio)
+            bg_h = target_h
+            bg_w = int(bg_h * img_ratio)
         else:
-            # Image is taller or equal, scale by width
-            new_w = target_w
-            new_h = int(new_w / img_ratio)
+            bg_w = target_w
+            bg_h = int(bg_w / img_ratio)
             
-        img = img.resize((new_w, new_h), Image.LANCZOS)
+        bg_img = original_img.resize((bg_w, bg_h), Image.LANCZOS)
         
-        # Center crop
-        left = (new_w - target_w) / 2
-        top = (new_h - target_h) / 2
-        right = (new_w + target_w) / 2
-        bottom = (new_h + target_h) / 2
-        img = img.crop((left, top, right, bottom))
+        # Center crop bg_img to exactly 1080x1920
+        bg_left = (bg_w - target_w) / 2
+        bg_top = (bg_h - target_h) / 2
+        bg_right = (bg_w + target_w) / 2
+        bg_bottom = (bg_h + target_h) / 2
+        bg_img = bg_img.crop((bg_left, bg_top, bg_right, bg_bottom))
         
-        w, h = target_w, target_h
+        # Apply heavy blur for cinematic visual effect
+        bg_img = bg_img.filter(ImageFilter.GaussianBlur(45))
         
-        # Bottom gradient covering 45% of height for text readability
-        ov_h = int(h * 0.45)
-        overlay = Image.new('RGBA', (w, ov_h), (0,0,0,0))
-        od = ImageDraw.Draw(overlay)
-        for y in range(ov_h):
-            alpha = int((y / ov_h) * 240)
-            od.line([(0, y), (w, y)], fill=(0,0,0,alpha))
-        img.alpha_composite(overlay, dest=(0, h - ov_h))
-        draw = ImageDraw.Draw(img)
+        canvas = bg_img.copy()
+        draw = ImageDraw.Draw(canvas)
         
-        # Red banner
+        # Apply premium semi-transparent dark mask overlay over the blurred canvas
+        overlay = Image.new('RGBA', (target_w, target_h), (0, 0, 0, 130))
+        canvas.alpha_composite(overlay)
+        
+        # 2. Fit the uncropped original sharp image on top
+        max_w, max_h = 1000, 1100
+        scale_w = max_w / w_orig
+        scale_h = max_h / h_orig
+        scale_factor = min(scale_w, scale_h)
+        
+        sharp_w = int(w_orig * scale_factor)
+        sharp_h = int(h_orig * scale_factor)
+        
+        sharp_img = original_img.resize((sharp_w, sharp_h), Image.LANCZOS)
+        
+        paste_x = int((target_w - sharp_w) / 2)
+        paste_y = int(120 + (1100 - sharp_h) / 2)
+        
+        # Draw a sharp 2px outline around the centered original image
+        border_layer = Image.new('RGBA', (target_w, target_h), (0, 0, 0, 0))
+        border_draw = ImageDraw.Draw(border_layer)
+        border_draw.rectangle(
+            [paste_x - 2, paste_y - 2, paste_x + sharp_w + 2, paste_y + sharp_h + 2],
+            outline=(255, 255, 255, 180),
+            width=2
+        )
+        canvas.alpha_composite(border_layer)
+        canvas.alpha_composite(sharp_img, dest=(paste_x, paste_y))
+        
+        # 3. Extract source metadata from text
+        source_match = re.search(r'(?i)(source:\s*[^\n]+)', text)
+        source_text = ""
+        if source_match:
+            source_text = source_match.group(1).strip()
+            # Clean emojis and variation selectors from source label
+            source_text = re.sub(r'[\U00010000-\U0010ffff]', '', source_text)
+            source_text = re.sub(r'[\u2600-\u27BF]', '', source_text)
+            source_text = re.sub(r'[\ufe00-\ufe0f\u200d]', '', source_text)
+            source_text = " ".join(source_text.split()).strip()
+            
+        # 4. Clean and format headline base (Removing source/links/emojis/tofu boxes)
+        headline_base = text
+        if source_match:
+            headline_base = headline_base.replace(source_match.group(1), "")
+            
+        headline_base = re.sub(r'(?i)read\s+full(\s+story)?', '', headline_base)
+        headline_base = re.sub(r'(?i)related:\s*join\s+teds\s+mordare\s+official.*', '', headline_base)
+        headline_base = re.sub(r'(?i)join\s+teds\s+mordare.*', '', headline_base)
+        
+        # Strip raw URLs and mentions
+        headline_base = " ".join(w for w in headline_base.split() if not w.startswith("http") and not w.startswith("@"))
+        
+        # Strip all emojis and variation selectors
+        clean_headline = re.sub(r'[\U00010000-\U0010ffff]', '', headline_base)
+        clean_headline = re.sub(r'[\u2600-\u27BF]', '', clean_headline)
+        clean_headline = re.sub(r'[\ufe00-\ufe0f\u200d]', '', clean_headline)
+        clean_headline = " ".join(clean_headline.split()).strip()[:180] or "News Update"
+        
+        # 5. Render Red Banner & Title Block
         RED = (186, 12, 47, 255)
-        by = h - ov_h + 40
-        draw.rectangle([0, by, 300, by + 50], fill=RED)
-        draw.text((30, by + 10), "BREAKING NEWS", fill=(255,255,255,255), font=get_font(32))
+        draw.rectangle([40, 1270, 360, 1325], fill=RED)
+        draw.text((65, 1280), "BREAKING NEWS", fill=(255, 255, 255, 255), font=get_font(30))
         
-        # Headline text wrapping
-        clean = " ".join(w for w in text.split() if not w.startswith("http") and not w.startswith("@"))[:200] or "News Update"
-        font_hl = get_font(42)
+        font_hl = get_font(40)
         lines, cur = [], []
-        for word in clean.split():
+        for word in clean_headline.split():
             test = " ".join(cur + [word])
             try: tw = draw.textlength(test, font=font_hl)
             except: tw = len(test) * 22
-            if tw <= (w - 80): cur.append(word)
+            if tw <= (target_w - 90): cur.append(word)
             else:
                 if cur: lines.append(" ".join(cur))
                 cur = [word]
         if cur: lines.append(" ".join(cur))
-        final = "\n".join(lines[:4])
+        final = "\n".join(lines[:3])
         
-        ty = by + 70
-        draw.text((42, ty + 2), final, fill=(0,0,0,200), font=font_hl)
-        draw.text((40, ty), final, fill=(255,255,255,255), font=font_hl)
+        ty = 1355
+        draw.text((42, ty + 2), final, fill=(0, 0, 0, 180), font=font_hl)
+        draw.text((40, ty), final, fill=(255, 255, 255, 255), font=font_hl)
         
+        # 6. Render Source Text in bottom-left in a smaller professional font
+        if source_text:
+            font_source = get_font(24)
+            draw.text((40, 1820), source_text, fill=(200, 200, 200, 220), font=font_source)
+            
         out = f"edited_{os.path.basename(image_path)}"
-        img.convert('RGB').save(out, 'JPEG', quality=95)
+        canvas.convert('RGB').save(out, 'JPEG', quality=95)
         return out
-    except Exception: return image_path
+    except Exception as e:
+        print(f"Error applying template: {e}")
+        return image_path
 
 def get_recent_posts(username, last_id, hours_back=24):
     from datetime import datetime, timezone, timedelta
