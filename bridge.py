@@ -169,12 +169,20 @@ async def main():
         await client.disconnect()
         return
     
+    last_id = get_last_processed_id()
+    print(f"Resuming bridge. Last processed message ID from memory: {last_id}")
     print(f"Successfully connected to channel: {entity.title} (ID: {entity.id})")
     print("Real-time News Bridge is active and listening for new messages...")
 
     @client.on(events.NewMessage(chats=entity))
     async def handler(event):
+        nonlocal last_id
         msg = event.message
+        
+        # Memory Check: skip duplicates or older posts
+        if msg.id <= last_id:
+            return
+            
         print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Received new channel message {msg.id}: {msg.text[:50] if msg.text else '(No Text)'}...")
         
         text = msg.text if msg.text else "News Update!"
@@ -205,6 +213,11 @@ async def main():
         if image_url:
             post_to_instagram(text, image_url)
             
+        # Update memory state
+        last_id = msg.id
+        set_last_processed_id(last_id)
+        print(f"Saved progress to memory. Last processed message ID updated to: {last_id}")
+        
         # Cleanup downloaded file to prevent local storage pollution
         if image_path and os.path.exists(image_path):
             try:
