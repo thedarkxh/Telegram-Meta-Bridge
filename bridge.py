@@ -95,14 +95,16 @@ def post_to_instagram(message, video_path, img_path):
             if tracks:
                 track = tracks[0]
                 print(f"🔥 Selected calming track: '{track.title}' by {track.display_artist} (ID: {track.id})")
-                print("📤 Uploading Reel with calming music track...")
-                media = client.clip_upload_with_music(
+                
+                # If uri is None, populate it from progressive_download_url to support local mixing
+                if not track.uri and track.progressive_download_url:
+                    track.uri = track.progressive_download_url
+                
+                print("📤 Uploading Reel with calming music track (audio mixed locally)...")
+                media = client.clip_upload_as_reel_with_music(
                     path=video_path,
                     caption=message,
-                    track=track,
-                    thumbnail=img_path,
-                    music_volume=1.0,
-                    original_volume=0.0
+                    track=track
                 )
                 print(f"✅ Posted to Instagram with calming music! ID: {media.id}")
             else:
@@ -233,7 +235,11 @@ def apply_news_template(image_path, text):
         clean_headline = re.sub(r'[\U00010000-\U0010ffff]', '', headline_base)
         clean_headline = re.sub(r'[\u2600-\u27BF]', '', clean_headline)
         clean_headline = re.sub(r'[\ufe00-\ufe0f\u200d]', '', clean_headline)
-        clean_headline = " ".join(clean_headline.split()).strip()[:180] or "News Update"
+        clean_headline = " ".join(clean_headline.split()).strip()
+        
+        # Strip "BREAKING NEWS" from the clean headline to avoid duplication with the red banner
+        clean_headline = re.sub(r'(?i)^\s*breaking\s+news\s*', '', clean_headline).strip()
+        clean_headline = clean_headline[:180] or "News Update"
         
         # 5. Render Red Banner & Title Block
         RED = (186, 12, 47, 255)
@@ -369,9 +375,12 @@ def clean_and_format_caption(text):
     # Remove consecutive empty lines (max 1 empty line)
     raw_caption = re.sub(r'\n{3,}', '\n\n', raw_caption).strip()
     
+    # Add a lively call-to-action to double engagement rates!
+    lively_prompt = "\n\nWhat are your thoughts on this? Share in the comments below! 👇💬✨"
+    
     # Append premium professional hashtags
-    hashtags = "\n\n#news #breakingnews #globalnews #worldnews #newsupdate #currentaffairs"
-    return raw_caption + hashtags
+    hashtags = "\n\n#news #breakingnews #globalnews #worldnews #newsupdate #currentaffairs #trending"
+    return raw_caption + lively_prompt + hashtags
 
 def process_and_post(image_path, text, msg_id):
     try:
