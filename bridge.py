@@ -8,7 +8,15 @@ from telethon.tl.functions.messages import GetHistoryRequest
 API_ID = os.getenv('TG_API_ID')
 API_HASH = os.getenv('TG_API_HASH')
 BOT_TOKEN = os.getenv('TG_BOT_TOKEN')
-SOURCE_CHANNEL = os.getenv('TG_SOURCE_CHANNEL') # e.g., '@channelusername'
+SOURCE_CHANNEL_RAW = os.getenv('TG_SOURCE_CHANNEL') # e.g., '@channelusername' or '-100123456789'
+
+# Parse SOURCE_CHANNEL: convert to integer if it represents one (Telethon needs int for channel IDs)
+SOURCE_CHANNEL = None
+if SOURCE_CHANNEL_RAW:
+    try:
+        SOURCE_CHANNEL = int(SOURCE_CHANNEL_RAW)
+    except ValueError:
+        SOURCE_CHANNEL = SOURCE_CHANNEL_RAW
 
 # Meta (FB/IG) API
 FB_PAGE_ID = os.getenv('FB_PAGE_ID')
@@ -20,8 +28,13 @@ STATE_FILE = 'last_msg_id.txt'
 
 def get_last_processed_id():
     if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, 'r') as f:
-            return int(f.read().strip())
+        try:
+            with open(STATE_FILE, 'r') as f:
+                content = f.read().strip()
+                if content:
+                    return int(content)
+        except ValueError:
+            pass
     return 0
 
 def set_last_processed_id(msg_id):
@@ -71,7 +84,15 @@ async def main():
     last_id = get_last_processed_id()
     
     # Get latest messages from channel
-    entity = await client.get_entity(SOURCE_CHANNEL)
+    try:
+        entity = await client.get_entity(SOURCE_CHANNEL)
+    except ValueError as e:
+        print(f"Entity not found in clean session cache ({e}). Fetching dialogs to populate cache...")
+        # Since GitHub Actions runs on a fresh VM every time, the session database is empty.
+        # Fetching dialogs populates the cache with all channels/chats the bot is a member of.
+        await client.get_dialogs()
+        entity = await client.get_entity(SOURCE_CHANNEL)
+        
     messages = await client.get_messages(entity, limit=10)
     
     new_messages = []
