@@ -87,9 +87,37 @@ def post_to_instagram(message, video_path, img_path):
     try:
         client = get_ig_client()
         if not client: return None
+        
+        # Try to fetch and attach trending music
+        media = None
+        try:
+            print("🎵 Fetching trending Reels music...")
+            res = client.music_trending(product="reels_audio")
+            items = res.get("items", []) if res else []
+            if items:
+                track_dict = items[0]["track"]
+                track_id = track_dict.get("id") or track_dict.get("audio_cluster_id")
+                print(f"🔥 Found trending track: '{track_dict.get('title')}' by {track_dict.get('display_artist')} (ID: {track_id})")
+                
+                track_obj = client.track_info_by_id(track_id)
+                print("📤 Uploading Reel with trending music track...")
+                media = client.clip_upload_as_reel_with_music(
+                    path=video_path,
+                    caption=message,
+                    track=track_obj
+                )
+                print(f"✅ Posted to Instagram with trending music! ID: {media.id}")
+            else:
+                print("ℹ️ No trending music items returned by Instagram API.")
+        except Exception as music_err:
+            print(f"⚠️ Could not attach trending music ({music_err}). Falling back to silent upload...")
             
-        media = client.clip_upload(video_path, message, thumbnail=img_path)
-        print(f"✅ Posted to Instagram! ID: {media.id}")
+        # Fallback to standard Reel upload if trending music upload was not successful
+        if not media:
+            print("📤 Uploading standard silent Reel...")
+            media = client.clip_upload(video_path, message, thumbnail=img_path)
+            print(f"✅ Posted standard Reel to Instagram! ID: {media.id}")
+            
         return media
     except Exception as e:
         print(f"❌ Instagram upload error: {e}")
