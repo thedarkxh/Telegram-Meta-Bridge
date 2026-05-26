@@ -2,6 +2,10 @@ import os
 import requests
 import time
 import re
+import wave
+import math
+import struct
+import subprocess
 from telethon import TelegramClient, events
 from PIL import Image, ImageDraw, ImageFont
 
@@ -71,36 +75,125 @@ def set_last_processed_id(msg_id):
     with open(STATE_FILE, 'w') as f:
         f.write(str(msg_id))
 
-def post_to_facebook(message, image_path=None):
-    """Posts text or local images natively to Facebook Page."""
+def generate_news_intro_sound(output_path="news_intro.wav"):
+    """
+    Generates a professional, rhythmic 'Breaking News' electronic chime/beep 
+    intro sound effect (WAV format) using pure Python built-in math/wave.
+    """
     try:
-        if image_path and os.path.exists(image_path):
-            print(f"Uploading local photo {image_path} to Facebook...")
-            url = f"https://graph.facebook.com/{FB_PAGE_ID}/photos"
+        print(f"Generating synthetic breaking news chimes to {output_path}...")
+        sample_rate = 44100
+        duration = 5.0  # 5 seconds
+        num_samples = int(sample_rate * duration)
+        
+        wav_file = wave.open(output_path, 'w')
+        wav_file.setparams((1, 2, sample_rate, num_samples, 'NONE', 'not compressed'))
+        
+        # Rhythmic beep pattern (frequency, duration_ms, pause_ms)
+        pattern = [
+            (880, 150, 100),  # beep 1
+            (880, 150, 100),  # beep 2
+            (880, 150, 100),  # beep 3
+            (1046, 250, 150), # beep 4 (higher pitch)
+            (880, 150, 100),  # beep 5
+            (880, 150, 100),  # beep 6
+            (1046, 250, 150), # beep 7
+            (523, 1000, 0),   # Sustained low dramatic base chime (C5)
+            (659, 1000, 0),   # Sustained mid harmony (E5)
+            (784, 1500, 0)    # Sustained high harmony (G5)
+        ]
+        
+        audio_data = []
+        for freq, dur_ms, pause_ms in pattern:
+            beep_samples = int(sample_rate * (dur_ms / 1000.0))
+            pause_samples = int(sample_rate * (pause_ms / 1000.0))
+            
+            for i in range(beep_samples):
+                envelope = 1.0
+                fade_width = int(beep_samples * 0.1)
+                if i < fade_width:
+                    envelope = i / fade_width
+                elif i > beep_samples - fade_width:
+                    envelope = (beep_samples - i) / fade_width
+                    
+                t = i / sample_rate
+                value = math.sin(2 * math.pi * freq * t) * envelope * 0.5
+                sample = int(value * 32767)
+                audio_data.append(struct.pack('<h', sample))
+                
+            for _ in range(pause_samples):
+                audio_data.append(struct.pack('<h', 0))
+                
+        while len(audio_data) < num_samples:
+            audio_data.append(struct.pack('<h', 0))
+            
+        wav_file.writeframes(b"".join(audio_data[:num_samples]))
+        wav_file.close()
+        print("Breaking News chimes generated successfully!")
+        return output_path
+    except Exception as e:
+        print(f"Failed to generate synthetic audio: {e}")
+        return None
+
+def create_news_video_with_audio(image_path, audio_path, output_video_path="news_post.mp4"):
+    """
+    Uses FFmpeg to merge the edited news image and the generated audio 
+    into a high-definition 5-second MP4 video loop.
+    """
+    try:
+        print(f"FFmpeg: Merging {image_path} and {audio_path} into video {output_video_path}...")
+        if os.path.exists(output_video_path):
+            os.remove(output_video_path)
+            
+        cmd = [
+            'ffmpeg', '-y',
+            '-loop', '1', '-i', image_path,
+            '-i', audio_path,
+            '-c:v', 'libx264',
+            '-tune', 'stillimage',
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-pix_fmt', 'yuv420p',
+            '-shortest',
+            output_video_path
+        ]
+        
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode == 0:
+            print(f"Successfully generated news video: {output_video_path}")
+            return output_video_path
+        else:
+            print(f"FFmpeg failed with exit code {result.returncode}. Error: {result.stderr.decode()}")
+            return None
+    except Exception as e:
+        print(f"Failed to compile video with FFmpeg: {e}")
+        return None
+
+def post_to_facebook(message, video_path=None):
+    """Posts a video with custom news chimes background music natively to Facebook Page."""
+    try:
+        if video_path and os.path.exists(video_path):
+            print(f"Uploading news video {video_path} to Facebook...")
+            url = f"https://graph.facebook.com/{FB_PAGE_ID}/videos"
             payload = {
-                'caption': message,
+                'description': message, # Video posts use 'description' instead of 'caption' or 'message'
                 'access_token': FB_ACCESS_TOKEN
             }
-            with open(image_path, 'rb') as f:
+            with open(video_path, 'rb') as f:
                 files = {'source': f}
                 res = requests.post(url, data=payload, files=files)
         else:
-            print("Posting text-only update to Facebook...")
-            url = f"https://graph.facebook.com/{FB_PAGE_ID}/feed"
-            payload = {
-                'message': message,
-                'access_token': FB_ACCESS_TOKEN
-            }
-            res = requests.post(url, data=payload)
+            print("Skipping Facebook: No video provided (text-only posts are disabled by user).")
+            return None
         
         res_json = res.json()
         if 'error' in res_json:
             print(f"Facebook API Error: {res_json['error'].get('message')} (Code: {res_json['error'].get('code')})")
         else:
-            print(f"Successfully posted to Facebook! ID: {res_json.get('id', res_json.get('post_id'))}")
+            print(f"Successfully posted video to Facebook! ID: {res_json.get('id')}")
         return res_json
     except Exception as e:
-        print(f"Failed to post to Facebook due to exception: {e}")
+        print(f"Failed to post video to Facebook: {e}")
         return {"error": str(e)}
 
 def post_to_instagram(message, image_url):
