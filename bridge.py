@@ -1,4 +1,5 @@
 import os
+import sys
 import requests
 import time
 import re
@@ -7,6 +8,10 @@ import math
 import struct
 import subprocess
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
+# Ensure virtual environment packages are available when running script directly
+venv_path = os.path.join(os.path.dirname(__file__), 'venv', 'lib', f'python{sys.version_info.major}.{sys.version_info.minor}', 'site-packages')
+if os.path.isdir(venv_path) and venv_path not in sys.path:
+    sys.path.insert(0, venv_path)
 
 def load_dotenv():
     dotenv_path = '.env'
@@ -36,21 +41,67 @@ if SOURCE_CHANNEL_RAW:
         SOURCE_CHANNEL = cleaned.lstrip('@').split('/')[-1]
 
 STATE_FILE = 'last_msg_id.txt'
+# Instagram session persistence file
+SESSION_FILE = 'ig_session.json'
 
 from instagrapi import Client
 ig_client = None
 
 def get_ig_client():
+    """Return a logged‑in Instagrapi client, handling session reuse and challenges.
+    The function attempts to load a saved session from `SESSION_FILE`. If the file
+    does not exist or loading fails, it performs a fresh login. On a challenge
+    error, it will try to resolve it using the `IG_CHALLENGE_CODE` environment
+    variable (preferred) or fall back to prompting the user.
+    """
     global ig_client
     if ig_client is not None:
         return ig_client
-    
-    print(f"Logging into Instagram as {IG_USERNAME}...")
+
+    from instagrapi import Client, exceptions
     ig_client = Client()
+
+    # Try loading a persisted session first
+    if os.path.exists(SESSION_FILE):
+        try:
+            ig_client.load_settings(SESSION_FILE)
+            # Verify the session is still valid
+            ig_client.get_user_info_by_name(IG_USERNAME)
+            print("✅ Loaded existing Instagram session.")
+            return ig_client
+        except Exception as load_err:
+            print(f"⚠️ Failed to load saved session: {load_err}. Re‑logging in.")
+
+    print(f"Logging into Instagram as {IG_USERNAME}...")
     try:
         ig_client.login(IG_USERNAME, IG_PASSWORD)
-        print("✅ Instagram login successful!")
+        # Save session for future runs
+        ig_client.dump_settings(SESSION_FILE)
+        print("✅ Instagram login successful! Session saved.")
         return ig_client
+    except exceptions.ChallengeError as chal_err:
+        print(f"⚠️ Instagram challenge encountered: {chal_err}")
+        # Attempt to resolve using env var
+        challenge_code = os.getenv('IG_CHALLENGE_CODE')
+        if challenge_code:
+            try:
+                ig_client.challenge_resolve(challenge_code)
+                ig_client.dump_settings(SESSION_FILE)
+                print("✅ Challenge resolved via IG_CHALLENGE_CODE. Session saved.")
+                return ig_client
+            except Exception as resolve_err:
+                print(f"❌ Failed to resolve challenge with env code: {resolve_err}")
+        # Fallback: ask the user to input the code manually (will pause execution)
+        try:
+            code = input("Enter Instagram challenge verification code: ")
+            ig_client.challenge_resolve(code)
+            ig_client.dump_settings(SESSION_FILE)
+            print("✅ Challenge resolved via manual input. Session saved.")
+            return ig_client
+        except Exception as manual_err:
+            print(f"❌ Manual challenge resolution failed: {manual_err}")
+            ig_client = None
+            return None
     except Exception as e:
         print(f"❌ Instagram login failed: {e}")
         ig_client = None
@@ -86,38 +137,64 @@ def post_to_instagram(message, video_path, img_path):
     print(f"📤 Uploading video to Instagram...")
     try:
         client = get_ig_client()
-        if not client: return None
-        
+        if not client:
+            return None
+
+        # Search for calming lofi music with retry/backoff to handle rate limits (429)
+        max_search_retries = 3
+        tracks = []
+        for attempt in range(1, max_search_retries + 1):
+            try:
+                print(f"🎵 Searching for calming lofi music (attempt {attempt}/{max_search_retries})...")
+                tracks = client.search_music("calming lofi")
+                if tracks:
+                    break
+                else:
+                    print(f"ℹ️ No tracks returned on attempt {attempt}.")
+            except Exception as e_search:
+                print(f"⚠️ Music search attempt {attempt} failed ({e_search}).")
+                if attempt < max_search_retries:
+                    backoff = 2 ** attempt
+                    print(f"🔄 Retrying music search in {backoff}s...")
+                    time.sleep(backoff)
+                else:
+                    print("❌ All music search attempts failed. Will fallback to silent upload.")
+
         media = None
-        try:
-            print("🎵 Searching for calming lofi music...")
-            tracks = client.search_music("calming lofi")
-            if tracks:
-                track = tracks[0]
-                print(f"🔥 Selected calming track: '{track.title}' by {track.display_artist} (ID: {track.id})")
-                
-                # If uri is None, populate it from progressive_download_url to support local mixing
-                if not track.uri and track.progressive_download_url:
-                    track.uri = track.progressive_download_url
-                
-                print("📤 Uploading Reel with calming music track (audio mixed locally)...")
-                media = client.clip_upload_as_reel_with_music(
-                    path=video_path,
-                    caption=message,
-                    track=track
-                )
-                print(f"✅ Posted to Instagram with calming music! ID: {media.id}")
-            else:
-                print("ℹ️ No calming music tracks found. Falling back to standard upload...")
-        except Exception as music_err:
-            print(f"⚠️ Could not attach calming music ({music_err}). Falling back to silent upload...")
-            
+        if tracks:
+            track = tracks[0]
+            print(f"🔥 Selected calming track: '{track.title}' by {track.display_artist} (ID: {track.id})")
+            # Ensure track has a URI for local mixing
+            if not getattr(track, 'uri', None) and getattr(track, 'progressive_download_url', None):
+                track.uri = track.progressive_download_url
+            # Upload with music, retry on failure
+            max_upload_retries = 3
+            for attempt in range(1, max_upload_retries + 1):
+                try:
+                    media = client.clip_upload_as_reel_with_music(
+                        path=video_path,
+                        caption=message,
+                        track=track
+                    )
+                    print(f"✅ Posted to Instagram with calming music! ID: {media.id}")
+                    break
+                except Exception as music_err:
+                    print(f"⚠️ Attempt {attempt} failed to attach music ({music_err})")
+                    if attempt < max_upload_retries:
+                        backoff = 2 ** attempt
+                        print(f"🔄 Retrying in {backoff}s...")
+                        time.sleep(backoff)
+                    else:
+                        print("❌ All attempts to attach music failed. Will fallback to silent upload.")
+        else:
+            print("ℹ️ No calming music tracks found after retries. Falling back to standard upload...")
+
         # Fallback to standard Reel upload if music upload was not successful
         if not media:
             print("📤 Uploading standard silent Reel...")
             media = client.clip_upload(video_path, message, thumbnail=img_path)
             print(f"✅ Posted standard Reel to Instagram! ID: {media.id}")
-            
+
         return media
     except Exception as e:
         print(f"❌ Instagram upload error: {e}")
