@@ -377,11 +377,11 @@ def get_recent_posts(username, last_id, hours_back=24):
                 if te != -1 and de != -1:
                     raw = block[te + 1: de]
                     # Extract the first link that is not a telegram join channel link
-                    url_match = re.search(r'href="([^"]+)"', raw)
-                    if url_match:
-                        url_val = url_match.group(1)
-                        if "t.me" not in url_val and "telegram.me" not in url_val:
-                            story_url = url_val
+                    urls = re.findall(r'href="([^"]+)"', raw)
+                    for u in urls:
+                        if "t.me" not in u and "telegram.me" not in u:
+                            story_url = u
+                            break
                     raw = raw.replace('<br>', ' ').replace('<br/>', ' ')
                     text = re.sub(r'<[^<]+?>', '', raw).strip()
                     
@@ -404,13 +404,13 @@ def get_recent_posts(username, last_id, hours_back=24):
 
 def clean_and_format_caption(text, story_url=None):
     if not text:
-        return "Teds Mordare Official News Update | @tedsxh\n\n#news #breakingnews #globalnews #worldnews #tedsmordare"
+        return "Neon Bulletin News Update | @neon.bulletin\n\n#news #breakingnews #globalnews #worldnews #neonbulletin"
         
     lines = text.split('\n')
     cleaned_lines = []
     
     # Custom intro credit branding block at the top
-    intro = "📡 Teds Mordare Official News Update | @tedsxh 📡\n"
+    intro = "📡 Neon Bulletin News Update | @neon.bulletin 📡\n"
     cleaned_lines.append(intro)
     
     for line in lines:
@@ -422,7 +422,7 @@ def clean_and_format_caption(text, story_url=None):
         # Remove lines that only contain raw URLs or promotional prompts
         if "READ FULL STORY" in line or "read full story" in line.lower():
             continue
-        if "join teds mordare" in line.lower() or "t.me/" in line.lower():
+        if "neon bulletin" in line.lower() or "t.me/" in line.lower() or "teds mordare" in line.lower():
             continue
             
         # Clean up any residual raw HTTP URLs from the caption text to avoid messy text
@@ -450,11 +450,11 @@ def clean_and_format_caption(text, story_url=None):
         "\n\n🚨 WHAT DO YOU THINK? Drop your thoughts below! 👇"
         "\n\n📌 SAVE this post to stay updated."
         "\n✈️ SHARE with a friend who needs to know this!"
-        "\n\n🔔 Follow @tedsxh for the fastest breaking news globally! 🌍"
+        "\n\n🔔 Follow @neon.bulletin for the fastest breaking news globally! 🌍"
     )
     
     # Append premium professional SEO hashtags (broad + niche)
-    hashtags = "\n\n#news #breakingnews #globalnews #worldnews #viral #explorepage #currentaffairs #update #newsupdate #tedsmordare"
+    hashtags = "\n\n#news #breakingnews #globalnews #worldnews #viral #explorepage #currentaffairs #update #newsupdate #neonbulletin"
     return raw_caption + link_section + footer + hashtags
 
 def process_and_post(image_path, text, msg_id, story_url=None):
@@ -469,7 +469,8 @@ def process_and_post(image_path, text, msg_id, story_url=None):
         return success
     finally:
         for fp in [f"edited_{os.path.basename(image_path)}", f"news_video_{msg_id}.mp4", image_path]:
-            if fp and os.path.exists(fp) and "default_bg" not in fp:
+            if fp and os.path.exists(fp):
+                if fp == "default_bg.jpg": continue
                 try: os.remove(fp)
                 except: pass
 
@@ -497,8 +498,10 @@ def main():
                                 img_path = f"temp_{pid}.jpg"
                                 with open(img_path, 'wb') as f: f.write(r.content)
                         except: pass
-                    else:
-                        print(f"  ℹ️ No photo in post #{pid}. Generating default News background.")
+                        
+                    if not os.path.exists(img_path) or os.path.getsize(img_path) == 0:
+                        print(f"  ℹ️ Generating default News background for post #{pid}.")
+                        img_path = "default_bg.jpg"
                         create_default_bg(img_path)
                         
                     success = process_and_post(img_path, text, pid, story_url)
