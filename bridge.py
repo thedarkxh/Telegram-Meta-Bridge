@@ -118,17 +118,30 @@ def set_last_processed_id(msg_id):
 
 def create_news_video(image_path, output_path="news_post.mp4"):
     try:
-        print(f"Compiling silent video for Instagram Reels...")
+        print(f"Compiling video with embedded music for Instagram Reels...")
         if os.path.exists(output_path): os.remove(output_path)
-        cmd = [
-            'ffmpeg', '-y', '-loop', '1', '-i', image_path,
-            '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
-            '-c:v', 'libx264', '-tune', 'stillimage',
-            '-c:a', 'aac', '-b:a', '128k',
-            '-pix_fmt', 'yuv420p',
-            '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2',
-            '-shortest', '-t', '5', output_path
-        ]
+        
+        music_path = os.path.join(os.path.dirname(__file__), "chill-fm.mp3")
+        if os.path.exists(music_path):
+            cmd = [
+                'ffmpeg', '-y', '-loop', '1', '-i', image_path,
+                '-stream_loop', '-1', '-i', music_path,
+                '-c:v', 'libx264', '-tune', 'stillimage',
+                '-c:a', 'aac', '-b:a', '128k',
+                '-pix_fmt', 'yuv420p',
+                '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2',
+                '-shortest', '-t', '5', output_path
+            ]
+        else:
+            cmd = [
+                'ffmpeg', '-y', '-loop', '1', '-i', image_path,
+                '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+                '-c:v', 'libx264', '-tune', 'stillimage',
+                '-c:a', 'aac', '-b:a', '128k',
+                '-pix_fmt', 'yuv420p',
+                '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2',
+                '-shortest', '-t', '5', output_path
+            ]
         r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
         return output_path if r.returncode == 0 else None
     except Exception: return None
@@ -140,60 +153,22 @@ def post_to_instagram(message, video_path, img_path):
         if not client:
             return None
 
-        # Search for calming lofi music with retry/backoff to handle rate limits (429)
-        max_search_retries = 3
-        tracks = []
-        for attempt in range(1, max_search_retries + 1):
+        # Upload standard Reel (audio is now embedded directly in the video file)
+        max_upload_retries = 3
+        media = None
+        for attempt in range(1, max_upload_retries + 1):
             try:
-                print(f"🎵 Searching for calming lofi music (attempt {attempt}/{max_search_retries})...")
-                tracks = client.search_music("calming lofi")
-                if tracks:
-                    break
-                else:
-                    print(f"ℹ️ No tracks returned on attempt {attempt}.")
-            except Exception as e_search:
-                print(f"⚠️ Music search attempt {attempt} failed ({e_search}).")
-                if attempt < max_search_retries:
+                media = client.clip_upload(video_path, message, thumbnail=img_path)
+                print(f"✅ Posted standard Reel to Instagram! ID: {media.id}")
+                break
+            except Exception as e_upload:
+                print(f"⚠️ Upload attempt {attempt} failed ({e_upload}).")
+                if attempt < max_upload_retries:
                     backoff = 2 ** attempt
-                    print(f"🔄 Retrying music search in {backoff}s...")
+                    print(f"🔄 Retrying upload in {backoff}s...")
                     time.sleep(backoff)
                 else:
-                    print("❌ All music search attempts failed. Will fallback to silent upload.")
-
-        media = None
-        if tracks:
-            track = tracks[0]
-            print(f"🔥 Selected calming track: '{track.title}' by {track.display_artist} (ID: {track.id})")
-            # Ensure track has a URI for local mixing
-            if not getattr(track, 'uri', None) and getattr(track, 'progressive_download_url', None):
-                track.uri = track.progressive_download_url
-            # Upload with music, retry on failure
-            max_upload_retries = 3
-            for attempt in range(1, max_upload_retries + 1):
-                try:
-                    media = client.clip_upload_as_reel_with_music(
-                        path=video_path,
-                        caption=message,
-                        track=track
-                    )
-                    print(f"✅ Posted to Instagram with calming music! ID: {media.id}")
-                    break
-                except Exception as music_err:
-                    print(f"⚠️ Attempt {attempt} failed to attach music ({music_err})")
-                    if attempt < max_upload_retries:
-                        backoff = 2 ** attempt
-                        print(f"🔄 Retrying in {backoff}s...")
-                        time.sleep(backoff)
-                    else:
-                        print("❌ All attempts to attach music failed. Will fallback to silent upload.")
-        else:
-            print("ℹ️ No calming music tracks found after retries. Falling back to standard upload...")
-
-        # Fallback to standard Reel upload if music upload was not successful
-        if not media:
-            print("📤 Uploading standard silent Reel...")
-            media = client.clip_upload(video_path, message, thumbnail=img_path)
-            print(f"✅ Posted standard Reel to Instagram! ID: {media.id}")
+                    print("❌ All upload attempts failed.")
 
         return media
     except Exception as e:
@@ -470,14 +445,16 @@ def clean_and_format_caption(text, story_url=None):
     else:
         link_section = "\n\n🔗 Full story link available in bio!"
         
-    # Custom lively branding/engagement footer
+    # Custom lively branding/engagement footer engineered for Instagram algorithm (Shares & Saves)
     footer = (
-        "\n\n💬 What are your thoughts on this update? Let us know in the comments below! 👇"
-        "\n\n🔔 Stay connected with the truth! Follow Teds Mordare Official on Telegram: @tedsxh"
+        "\n\n🚨 WHAT DO YOU THINK? Drop your thoughts below! 👇"
+        "\n\n📌 SAVE this post to stay updated."
+        "\n✈️ SHARE with a friend who needs to know this!"
+        "\n\n🔔 Follow @tedsxh for the fastest breaking news globally! 🌍"
     )
     
-    # Append premium professional hashtags
-    hashtags = "\n\n#news #breakingnews #globalnews #worldnews #newsupdate #currentaffairs #trending #tedsmordare"
+    # Append premium professional SEO hashtags (broad + niche)
+    hashtags = "\n\n#news #breakingnews #globalnews #worldnews #viral #explorepage #currentaffairs #update #newsupdate #tedsmordare"
     return raw_caption + link_section + footer + hashtags
 
 def process_and_post(image_path, text, msg_id, story_url=None):

@@ -1,71 +1,101 @@
-# 📡 Telegram-to-Instagram Reels News Bridge
+# Social News Bridge 📡
 
-A production-grade, highly optimized Python bridge that automatically polls a Telegram channel, extracts breaking news posts, formats the uncropped images into premium vertical Instagram Reels (`1080x1920`), attaches calming lo-fi audio tracks, parses professional captions, and publishes them natively to Instagram.
+<div align="center">
 
----
+![Python Version](https://img.shields.io/badge/python-3.13%20%7C%203.12-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Status](https://img.shields.io/badge/status-active-brightgreen)
 
-## 🚀 Features
+</div>
 
-*   **📺 Premium Border-Touching Reels Layout:** 
-    *   **No-Crop Visuals:** Completely preserves the original photo without cropping or squishing.
-    *   **Cinematic Presentation:** Landscape and square images are scaled to touch the screen borders horizontally (exact `1080px` canvas width) and separated by elegant horizontal boundary lines over a heavily blurred backdrop (`GaussianBlur(45)`) with a dark mask overlay. Tall portrait images are fitted inside a safe vertical viewport.
-*   **🎵 Automated Calming Audio Sync:**
-    *   Query-based programmatic integration with Instagram's live audio trends. Auto-selects and attaches soothing, high-engagement calming lo-fi tracks (like *Calming Lofi* by *Lofi Fruits Music*) using the stable `clip_upload_with_music` API to maximize Reels algorithm discoverability.
-    *   *Mute Fallback:* Automatically falls back to a high-quality locally compiled silent audio track (`anullsrc`) if Instagram's music databases are temporarily unreachable, ensuring 100% publishing uptime.
-*   **✍️ Clean Typography & ToFus Resolution:**
-    *   **No Rectangle Boxes:** Automatically filters out graphic emojis and variation selectors from the image title overlays. This completely resolves the Linux font rendering limitation that caused empty "rectangle box" (tofu) characters to appear on the image.
-    *   **Source Extraction:** Parses `"Source: BBC News"` or similar labels, removes them from the main headline to save space, and renders them at the bottom-left of the canvas in a smaller, elegant font.
-    *   **Headline Cleanup:** Automatically filters out promotional, navigation, and link-related phrases from the image headline block.
-*   **📝 Professional Caption Cleansing:**
-    *   Strips ugly, non-clickable raw URLs and promotional telegram join banners from captions. Normalizes spacing into neat paragraphs, and appends a curated set of high-engagement news hashtags (`#news #breakingnews #globalnews #worldnews #newsupdate #currentaffairs`).
-*   **🛠️ Self-Healing Process Manager (`run_local.py`):**
-    *   A robust runner script wraps the bridge. If the process exits due to temporary network loss, session timeouts, or API blocks, it automatically logs a warning, waits 10 seconds, and performs a clean restart.
+## Overview
 
----
+**Social News Bridge** is a premium automation tool that monitors a Telegram channel, transforms each news post into a stunning Instagram Reel, and publishes it with professional captions and optional background music. The bridge includes:
 
-## 📂 Project Structure
+- **Dynamic image compositing** with blurred cinematic background, premium borders, and a red "BREAKING NEWS" banner.
+- **Automatic caption generation** featuring branding (`Teds Mordare Official`), story links, hashtags, and engagement prompts.
+- **Music integration** with robust retry/back‑off handling for Instagram’s rate‑limited music API.
+- **Session persistence** to avoid repeated Instagram logins and intelligent challenge resolution.
+- **Elegant dark‑mode gradients** and modern typography for a polished visual aesthetic.
 
-*   `bridge.py` — The core logic containing the HTML parsing loop, Pillow image composition engine, professional caption cleanup, and stable `instagrapi` Reels publisher.
-*   `run_local.py` — Self-healing manager loop that runs the bridge persistently in the background.
-*   `last_msg_id.txt` — Memory state file tracking the last successfully processed message ID to prevent duplicate posts.
-*   `.env` — Local configuration file containing sensitive credentials.
+## Features
 
----
+| Feature | Description |
+|---------|-------------|
+| **Telegram Scraper** | Pulls recent posts from a public Telegram channel without needing an API key. |
+| **Image Processing** | Resizes, blurs, and overlays the original image on a 1080×1920 canvas with premium borders. |
+| **Video Generation** | Creates a 5‑second silent video (or with music) ready for Instagram Reels. |
+| **Music Search & Upload** | Searches for "calming lofi" tracks, retries on 429 errors, and mixes locally when needed. |
+| **Instagram Session Management** | Saves `ig_session.json` for reuse, handles login challenges via `IG_CHALLENGE_CODE`. |
+| **Professional Captions** | Adds branding, removes raw URLs, includes a clickable story link, and appends lively footer & hashtags. |
+| **Extensible** | Easy to swap music queries, change branding, or adapt to other platforms. |
 
-## ⚙️ Environment Variables (`.env`)
+## Installation
 
-Create a `.env` file in the root directory:
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/social-news-bridge.git
+cd social-news-bridge
 
-```env
-# Telegram Configuration
-TG_SOURCE_CHANNEL=@tedsxh
+# Create a virtual environment (recommended)
+python3 -m venv venv
+source venv/bin/activate
 
-# Instagram Configuration
+# Install dependencies (includes video support for instagrapi)
+./venv/bin/pip install "instagrapi[video]" --no-deps
+./venv/bin/pip install --no-deps "moviepy==2.2.1"
+./venv/bin/pip install -r requirements.txt   # any additional deps like Pillow, requests, python-dotenv
+```
+
+> **Note:** The `instagrapi[video]` extra installs `ffmpeg`‑related Python bindings. Ensure you have the system `ffmpeg` binary installed (`sudo apt install ffmpeg`).
+
+## Configuration
+
+Create a `.env` file in the project root:
+
+```dotenv
 IG_USERNAME=your_instagram_username
 IG_PASSWORD=your_instagram_password
+TG_SOURCE_CHANNEL=@tedsxh   # Telegram channel handle (without the leading @ optional)
+# Optional: Provide a verification code when Instagram triggers a challenge
+IG_CHALLENGE_CODE=123456
 ```
+
+- `IG_CHALLENGE_CODE` can be set once you receive the verification code via email/SMS. The script will automatically resolve the challenge.
+- The bridge stores the Instagram session in `ig_session.json` after the first successful login.
+
+## Usage
+
+```bash
+# Activate virtual env if not already active
+source venv/bin/activate
+
+# Run the bridge
+python bridge.py
+```
+
+The bridge will:
+1. Load the last processed Telegram post ID (`last_msg_id.txt`).
+2. Poll the Telegram channel for new posts.
+3. For each new post, generate an image/video, attach music (if available), and publish a Reel.
+4. Update the state file so it resumes gracefully on restart.
+
+## Customisation
+
+- **Music Query**: Change the search term in `post_to_instagram` (`client.search_music("calming lofi")`).
+- **Branding**: Edit `clean_and_format_caption` to modify the intro, footer, or hashtags.
+- **Visual Style**: Adjust colors, gradients, or border thickness in `apply_news_template`.
+
+## Troubleshooting
+
+- **Login Challenges**: If Instagram asks for a verification code, set `IG_CHALLENGE_CODE` in `.env` or provide it when prompted.
+- **Rate‑Limit (429) on Music**: The bridge already retries three times with exponential back‑off. If failures persist, consider increasing `max_search_retries` in `post_to_instagram`.
+- **FFmpeg Errors**: Ensure the system `ffmpeg` binary is in your `$PATH`.
+
+## License
+
+MIT License – see the `LICENSE` file for details.
 
 ---
 
-## 🚀 Quick Start
-
-### 1. Install System Dependencies
-Ensure `ffmpeg` and system TrueType fonts are installed:
-```bash
-sudo apt update
-sudo apt install -y ffmpeg fonts-dejavu-core
-```
-
-### 2. Set Up Virtual Environment & Packages
-Initialize the Python virtual environment and install the required modules:
-```bash
-python3 -m venv venv
-./venv/bin/pip install -r requirements.txt
-```
-
-### 3. Launch the Persistent Sync Bridge
-Start the self-healing process manager loop:
-```bash
-python3 run_local.py
-```
-This manager will monitor the feed, resume parsing from the last processed message, and automatically mirror posts in real-time.
+*Built with ❤️ by the Teds Mordare Official team.*

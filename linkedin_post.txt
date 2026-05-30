@@ -1,0 +1,23 @@
+🚀 Excited to share a massive technical milestone for my media project, Teds Mordare Official!
+
+Over the last few weeks, I’ve been building a fully automated News Broadcasting Engine from scratch. 
+
+Managing news requires speed, and doing it manually just wasn't cutting it. So, I engineered a Python-based bridge that puts our entire Instagram distribution on autopilot. 🤖
+
+Here is how the pipeline works:
+1️⃣ Ingestion: The system monitors our central Telegram channel for breaking news updates in real-time.
+2️⃣ Media Processing: It intercepts raw images and dynamically runs them through Pillow and FFmpeg to generate cinematic, 1080x1920 videos with blurred backgrounds, premium overlays, and embedded background music.
+3️⃣ AI Captions: The text is parsed, cleaned, and injected with algorithm-friendly Call-To-Actions and SEO hashtags.
+4️⃣ Distribution: Using the instagrapi library, the finished Reel is instantly published to our Instagram page.
+
+No human intervention. Zero delay. ⚡
+
+Building this taught me a ton about API rate-limit handling, persistent session management, and automated media rendering.
+
+If you want to see the automation in action, check out the live updates here:
+📲 Telegram: https://t.me/tedsxh
+📸 Instagram: https://www.instagram.com/neon.bulletin/
+
+Would love to connect with other developers or creators working on automation, Python, or digital media! Let me know what you think of the tech stack below. 👇
+
+#Python #Automation #SoftwareEngineering #Developers #SocialMediaAPI #FFmpeg #TedsMordare #TechInnovation
