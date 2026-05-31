@@ -486,7 +486,14 @@ def main():
         try:
             new_posts = get_recent_posts(SOURCE_CHANNEL, last_id)
             if new_posts:
-                print(f"\n📬 Found {len(new_posts)} new post(s)!")
+                if len(new_posts) > 5:
+                    print(f"\n⚠️ Massive backlog detected ({len(new_posts)} posts). Skipping to the 3 most recent to stay current and avoid spam blocks.")
+                    skipped_posts = new_posts[:-3]
+                    last_id = skipped_posts[-1][0]
+                    set_last_processed_id(last_id)
+                    new_posts = new_posts[-3:]
+                    
+                print(f"\n📬 Processing {len(new_posts)} recent post(s)!")
                 for pid, text, photo_url, story_url in new_posts:
                     print(f"  ⏭ Processing post #{pid}...")
                     img_path = "default_bg.jpg"
