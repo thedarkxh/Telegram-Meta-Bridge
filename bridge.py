@@ -66,7 +66,7 @@ def get_ig_client():
         try:
             ig_client.load_settings(SESSION_FILE)
             # Verify the session is still valid
-            ig_client.get_user_info_by_name(IG_USERNAME)
+            ig_client.user_info_by_username(IG_USERNAME)
             print("✅ Loaded existing Instagram session.")
             return ig_client
         except Exception as load_err:
@@ -506,12 +506,18 @@ def main():
                         
                     success = process_and_post(img_path, text, pid, story_url)
                     if not success:
-                        print(f"  ❌ Post #{pid} failed (likely token expiration). Will retry next cycle.")
+                        print(f"  ❌ Post #{pid} failed (likely token expiration or action block). Will retry next cycle.")
                         break # Stop processing to avoid skipping posts
                         
                     last_id = pid
                     set_last_processed_id(last_id)
                     print(f"  ✅ Finished post #{pid} (Memory updated: {last_id})")
+                    
+                    # Mandatory delay to bypass Sentry/IAF upload restrictions
+                    import random
+                    wait_time = random.randint(300, 1200)
+                    print(f"  ⏳ Mandatory cooldown: Sleeping for {wait_time // 60}m {wait_time % 60}s to prevent spam blocks...")
+                    time.sleep(wait_time)
         except Exception as e:
             print(f"Polling error: {e}")
             
