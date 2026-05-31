@@ -34,12 +34,20 @@ def make_compilations():
         print("❌ No posts found.")
         return
 
-    # Filter posts: prefer ones with actual text, drop pure promo posts
+    # Define premium tier sources
+    HIGH_GRADE_SOURCES = ["BBC News", "Reuters", "Bloomberg", "AP News", "The New York Times", "The Wall Street Journal", "The Guardian"]
+
+    # Filter posts: prefer ones with actual text and only high-grade sources
     valid_posts = []
     for p in reversed(posts):
         pid, text, photo_url, story_url = p
         if not text or "News Update" == text.strip():
             continue
+            
+        # Check if the text contains any of our high-grade source names
+        if not any(source in text for source in HIGH_GRADE_SOURCES):
+            continue
+            
         valid_posts.append(p)
         if len(valid_posts) == 9:
             break
