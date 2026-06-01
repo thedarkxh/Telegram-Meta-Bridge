@@ -327,10 +327,11 @@ def process_individual(post):
                 try: os.remove(fp)
                 except: pass
 
-def get_recent_posts(username, processed_ids, limit=20):
+def get_recent_posts(username, processed_ids, limit=200):
     current_url = f"https://telegram.me/s/{username}"
     all_posts = []
     pages = 0
+    # Fetch up to 10 pages (200 posts) to ensure we capture all high-grade news in backlogs
     while pages < 10 and len(all_posts) < limit:
         pages += 1
         try:
@@ -397,18 +398,31 @@ def main():
     while True:
         try:
             processed = get_processed_ids()
-            new_posts = get_recent_posts(SOURCE_CHANNEL, processed, limit=15)
+            # Fetch a deep history (up to 200 posts) so no high-grade news is missed
+            new_posts = get_recent_posts(SOURCE_CHANNEL, processed, limit=200)
             
             if new_posts:
                 print(f"\n📬 Fetched {len(new_posts)} unprocessed post(s)!")
                 
                 high_grade = []
-                low_grade = []
+                low_grade_all = []
                 for p in new_posts:
                     if any(s in p[1] for s in HIGH_GRADE_SOURCES):
                         high_grade.append(p)
                     else:
-                        low_grade.append(p)
+                        low_grade_all.append(p)
+                
+                low_grade = low_grade_all
+                # If there's a massive backlog, rescue ALL high-grade news, but drop old low-grade news
+                if len(new_posts) > 15:
+                    print(f"⚠️ Massive backlog detected ({len(new_posts)} posts).")
+                    low_grade = low_grade_all[-5:] # Keep only the 5 newest low-grade posts
+                    skipped_low = low_grade_all[:-5]
+                    
+                    if skipped_low:
+                        add_processed_ids([p[0] for p in skipped_low])
+                        print(f"  🗑️ Purged {len(skipped_low)} old low-grade posts to avoid spam blocks.")
+                    print(f"  💎 Rescued {len(high_grade)} high-grade stories from the backlog for compilation!")
                         
                 # 1. Process High Grade as Compilations (Groups of 3)
                 for i in range(0, len(high_grade), 3):
