@@ -8,11 +8,12 @@ if os.path.isdir(venv_path) and venv_path not in sys.path:
 import requests
 import time
 import re
-import wave
-import math
-import struct
 import subprocess
+import shutil
+import random
+from datetime import datetime, timezone, timedelta
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from instagrapi import Client, exceptions
 
 def load_dotenv():
     dotenv_path = '.env'
@@ -21,8 +22,7 @@ def load_dotenv():
         with open(dotenv_path, 'r') as f:
             for line in f:
                 line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
+                if not line or line.startswith('#'): continue
                 if '=' in line:
                     key, val = line.split('=', 1)
                     os.environ[key.strip()] = val.strip().strip("'").strip('"')
@@ -32,7 +32,6 @@ load_dotenv()
 IG_USERNAME = os.getenv('IG_USERNAME')
 IG_PASSWORD = os.getenv('IG_PASSWORD')
 SOURCE_CHANNEL_RAW = os.getenv('TG_SOURCE_CHANNEL')
-
 SOURCE_CHANNEL = None
 if SOURCE_CHANNEL_RAW:
     cleaned = SOURCE_CHANNEL_RAW.strip().strip("'").strip('"')
@@ -41,32 +40,20 @@ if SOURCE_CHANNEL_RAW:
     else:
         SOURCE_CHANNEL = cleaned.lstrip('@').split('/')[-1]
 
-STATE_FILE = 'last_msg_id.txt'
-# Instagram session persistence file
+STATE_FILE = 'processed_ids.txt'
 SESSION_FILE = 'ig_session.json'
+HIGH_GRADE_SOURCES = ["BBC News", "Reuters", "Bloomberg", "AP News", "The New York Times", "The Wall Street Journal", "The Guardian"]
 
-from instagrapi import Client
 ig_client = None
 
 def get_ig_client():
-    """Return a logged‑in Instagrapi client, handling session reuse and challenges.
-    The function attempts to load a saved session from `SESSION_FILE`. If the file
-    does not exist or loading fails, it performs a fresh login. On a challenge
-    error, it will try to resolve it using the `IG_CHALLENGE_CODE` environment
-    variable (preferred) or fall back to prompting the user.
-    """
     global ig_client
     if ig_client is not None:
         return ig_client
-
-    from instagrapi import Client, exceptions
     ig_client = Client()
-
-    # Try loading a persisted session first
     if os.path.exists(SESSION_FILE):
         try:
             ig_client.load_settings(SESSION_FILE)
-            # Verify the session is still valid
             ig_client.user_info_by_username(IG_USERNAME)
             print("✅ Loaded existing Instagram session.")
             return ig_client
@@ -76,105 +63,25 @@ def get_ig_client():
     print(f"Logging into Instagram as {IG_USERNAME}...")
     try:
         ig_client.login(IG_USERNAME, IG_PASSWORD)
-        # Save session for future runs
         ig_client.dump_settings(SESSION_FILE)
         print("✅ Instagram login successful! Session saved.")
         return ig_client
-    except exceptions.ChallengeError as chal_err:
-        print(f"⚠️ Instagram challenge encountered: {chal_err}")
-        # Attempt to resolve using env var
-        challenge_code = os.getenv('IG_CHALLENGE_CODE')
-        if challenge_code:
-            try:
-                ig_client.challenge_resolve(challenge_code)
-                ig_client.dump_settings(SESSION_FILE)
-                print("✅ Challenge resolved via IG_CHALLENGE_CODE. Session saved.")
-                return ig_client
-            except Exception as resolve_err:
-                print(f"❌ Failed to resolve challenge with env code: {resolve_err}")
-        # Fallback: ask the user to input the code manually (will pause execution)
-        try:
-            code = input("Enter Instagram challenge verification code: ")
-            ig_client.challenge_resolve(code)
-            ig_client.dump_settings(SESSION_FILE)
-            print("✅ Challenge resolved via manual input. Session saved.")
-            return ig_client
-        except Exception as manual_err:
-            print(f"❌ Manual challenge resolution failed: {manual_err}")
-            ig_client = None
-            return None
     except Exception as e:
         print(f"❌ Instagram login failed: {e}")
         ig_client = None
         return None
 
-def get_last_processed_id():
+def get_processed_ids():
     if os.path.exists(STATE_FILE):
-        try: return int(open(STATE_FILE).read().strip())
-        except ValueError: pass
-    return 0
+        try:
+            return set(int(x.strip()) for x in open(STATE_FILE) if x.strip())
+        except: pass
+    return set()
 
-def set_last_processed_id(msg_id):
-    with open(STATE_FILE, 'w') as f: f.write(str(msg_id))
-
-def create_news_video(image_path, output_path="news_post.mp4"):
-    try:
-        print(f"Compiling video with embedded music for Instagram Reels...")
-        if os.path.exists(output_path): os.remove(output_path)
-        
-        music_path = os.path.join(os.path.dirname(__file__), "chill-fm.mp3")
-        if os.path.exists(music_path):
-            cmd = [
-                'ffmpeg', '-y', '-loop', '1', '-i', image_path,
-                '-stream_loop', '-1', '-i', music_path,
-                '-c:v', 'libx264', '-tune', 'stillimage',
-                '-c:a', 'aac', '-b:a', '128k',
-                '-pix_fmt', 'yuv420p',
-                '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2',
-                '-shortest', '-t', '5', output_path
-            ]
-        else:
-            cmd = [
-                'ffmpeg', '-y', '-loop', '1', '-i', image_path,
-                '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
-                '-c:v', 'libx264', '-tune', 'stillimage',
-                '-c:a', 'aac', '-b:a', '128k',
-                '-pix_fmt', 'yuv420p',
-                '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2',
-                '-shortest', '-t', '5', output_path
-            ]
-        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-        return output_path if r.returncode == 0 else None
-    except Exception: return None
-
-def post_to_instagram(message, video_path, img_path):
-    print(f"📤 Uploading video to Instagram...")
-    try:
-        client = get_ig_client()
-        if not client:
-            return None
-
-        # Upload standard Reel (audio is now embedded directly in the video file)
-        max_upload_retries = 3
-        media = None
-        for attempt in range(1, max_upload_retries + 1):
-            try:
-                media = client.clip_upload(video_path, message, thumbnail=img_path)
-                print(f"✅ Posted standard Reel to Instagram! ID: {media.id}")
-                break
-            except Exception as e_upload:
-                print(f"⚠️ Upload attempt {attempt} failed ({e_upload}).")
-                if attempt < max_upload_retries:
-                    backoff = 2 ** attempt
-                    print(f"🔄 Retrying upload in {backoff}s...")
-                    time.sleep(backoff)
-                else:
-                    print("❌ All upload attempts failed.")
-
-        return media
-    except Exception as e:
-        print(f"❌ Instagram upload error: {e}")
-        return None
+def add_processed_ids(pids):
+    with open(STATE_FILE, 'a') as f:
+        for pid in pids:
+            f.write(f"{pid}\n")
 
 def get_font(size=24):
     for p in ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"]:
@@ -185,7 +92,6 @@ def create_default_bg(output_path="default_bg.jpg"):
     w, h = 1080, 1920
     img = Image.new('RGB', (w, h))
     draw = ImageDraw.Draw(img)
-    # Professional dark blue gradient
     for y in range(h):
         r, g, b = int(15 + (y/h)*20), int(25 + (y/h)*30), int(45 + (y/h)*50)
         draw.line([(0, y), (w, y)], fill=(r, g, b))
@@ -196,12 +102,10 @@ def apply_news_template(image_path, text):
     try:
         original_img = Image.open(image_path).convert('RGBA')
         w_orig, h_orig = original_img.size
-        
         target_w, target_h = 1080, 1920
         img_ratio = w_orig / h_orig
         target_ratio = target_w / target_h
         
-        # 1. Create blurred background canvas covering 1080x1920
         if img_ratio > target_ratio:
             bg_h = target_h
             bg_w = int(bg_h * img_ratio)
@@ -210,91 +114,58 @@ def apply_news_template(image_path, text):
             bg_h = int(bg_w / img_ratio)
             
         bg_img = original_img.resize((bg_w, bg_h), Image.LANCZOS)
-        
-        # Center crop bg_img to exactly 1080x1920
         bg_left = (bg_w - target_w) / 2
         bg_top = (bg_h - target_h) / 2
         bg_right = (bg_w + target_w) / 2
         bg_bottom = (bg_h + target_h) / 2
         bg_img = bg_img.crop((bg_left, bg_top, bg_right, bg_bottom))
-        
-        # Apply heavy blur for cinematic visual effect
         bg_img = bg_img.filter(ImageFilter.GaussianBlur(45))
         
         canvas = bg_img.copy()
         draw = ImageDraw.Draw(canvas)
-        
-        # Apply premium semi-transparent dark mask overlay over the blurred canvas
         overlay = Image.new('RGBA', (target_w, target_h), (0, 0, 0, 130))
         canvas.alpha_composite(overlay)
         
-        # 2. Fit the uncropped original sharp image on top (Touch borders horizontally if landscape/square)
         if img_ratio >= target_ratio:
-            # Image is landscape or square. Touch horizontal borders!
             sharp_w = target_w
             sharp_h = int(sharp_w / img_ratio)
             paste_x = 0
             paste_y = int(120 + (1100 - sharp_h) / 2)
         else:
-            # Image is portrait/vertical. Fit it vertically within safe region.
             sharp_h = 1100
             sharp_w = int(sharp_h * img_ratio)
             paste_x = int((target_w - sharp_w) / 2)
             paste_y = 120
             
         sharp_img = original_img.resize((sharp_w, sharp_h), Image.LANCZOS)
-        
-        # Draw sleek borders for full-width band or a box border for vertical images
         border_layer = Image.new('RGBA', (target_w, target_h), (0, 0, 0, 0))
         border_draw = ImageDraw.Draw(border_layer)
         if paste_x == 0:
-            # Draw professional top/bottom border separator lines
             border_draw.line([(0, paste_y - 2), (target_w, paste_y - 2)], fill=(255, 255, 255, 140), width=2)
             border_draw.line([(0, paste_y + sharp_h + 1), (target_w, paste_y + sharp_h + 1)], fill=(255, 255, 255, 140), width=2)
         else:
-            # Draw outline border around centered tall image
-            border_draw.rectangle(
-                [paste_x - 2, paste_y - 2, paste_x + sharp_w + 2, paste_y + sharp_h + 2],
-                outline=(255, 255, 255, 180),
-                width=2
-            )
+            border_draw.rectangle([paste_x - 2, paste_y - 2, paste_x + sharp_w + 2, paste_y + sharp_h + 2], outline=(255, 255, 255, 180), width=2)
+            
         canvas.alpha_composite(border_layer)
         canvas.alpha_composite(sharp_img, dest=(paste_x, paste_y))
         
-        # 3. Extract source metadata from text
         source_match = re.search(r'(?i)(source:\s*[^\n]+)', text)
         source_text = ""
         if source_match:
             source_text = source_match.group(1).strip()
-            # Clean emojis and variation selectors from source label
             source_text = re.sub(r'[\U00010000-\U0010ffff]', '', source_text)
-            source_text = re.sub(r'[\u2600-\u27BF]', '', source_text)
-            source_text = re.sub(r'[\ufe00-\ufe0f\u200d]', '', source_text)
             source_text = " ".join(source_text.split()).strip()
             
-        # 4. Clean and format headline base (Removing source/links/emojis/tofu boxes)
         headline_base = text
-        if source_match:
-            headline_base = headline_base.replace(source_match.group(1), "")
-            
+        if source_match: headline_base = headline_base.replace(source_match.group(1), "")
         headline_base = re.sub(r'(?i)read\s+full(\s+story)?', '', headline_base)
-        headline_base = re.sub(r'(?i)related:\s*join\s+teds\s+mordare\s+official.*', '', headline_base)
-        headline_base = re.sub(r'(?i)join\s+teds\s+mordare.*', '', headline_base)
-        
-        # Strip raw URLs and mentions
+        headline_base = re.sub(r'(?i)related:\s*join.*', '', headline_base)
         headline_base = " ".join(w for w in headline_base.split() if not w.startswith("http") and not w.startswith("@"))
-        
-        # Strip all emojis and variation selectors
         clean_headline = re.sub(r'[\U00010000-\U0010ffff]', '', headline_base)
-        clean_headline = re.sub(r'[\u2600-\u27BF]', '', clean_headline)
-        clean_headline = re.sub(r'[\ufe00-\ufe0f\u200d]', '', clean_headline)
         clean_headline = " ".join(clean_headline.split()).strip()
-        
-        # Strip "BREAKING NEWS" from the clean headline to avoid duplication with the red banner
         clean_headline = re.sub(r'(?i)^\s*breaking\s+news\s*', '', clean_headline).strip()
         clean_headline = clean_headline[:180] or "News Update"
         
-        # 5. Render Red Banner & Title Block
         RED = (186, 12, 47, 255)
         draw.rectangle([40, 1270, 360, 1325], fill=RED)
         draw.text((65, 1280), "BREAKING NEWS", fill=(255, 255, 255, 255), font=get_font(30))
@@ -316,10 +187,8 @@ def apply_news_template(image_path, text):
         draw.text((42, ty + 2), final, fill=(0, 0, 0, 180), font=font_hl)
         draw.text((40, ty), final, fill=(255, 255, 255, 255), font=font_hl)
         
-        # 6. Render Source Text in bottom-left in a smaller professional font
         if source_text:
-            font_source = get_font(24)
-            draw.text((40, 1820), source_text, fill=(200, 200, 200, 220), font=font_source)
+            draw.text((40, 1820), source_text, fill=(200, 200, 200, 220), font=get_font(24))
             
         out = f"edited_{os.path.basename(image_path)}"
         canvas.convert('RGB').save(out, 'JPEG', quality=95)
@@ -328,16 +197,142 @@ def apply_news_template(image_path, text):
         print(f"Error applying template: {e}")
         return image_path
 
-def get_recent_posts(username, last_id, hours_back=24):
-    from datetime import datetime, timezone, timedelta
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours_back)
+def create_news_video(image_path, output_path="news_post.mp4"):
+    try:
+        print(f"Compiling 5s video with embedded music...")
+        if os.path.exists(output_path): os.remove(output_path)
+        music_path = os.path.join(os.path.dirname(__file__), "chill-fm.mp3")
+        cmd = [
+            'ffmpeg', '-y', '-loop', '1', '-i', image_path,
+            '-stream_loop', '-1', '-i', music_path,
+            '-c:v', 'libx264', '-tune', 'stillimage',
+            '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p',
+            '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2',
+            '-shortest', '-t', '5', output_path
+        ]
+        r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return output_path if r.returncode == 0 else None
+    except Exception: return None
+
+def post_to_instagram(message, video_path, img_path):
+    print(f"📤 Uploading video to Instagram...")
+    try:
+        client = get_ig_client()
+        if not client: return None
+        for attempt in range(1, 4):
+            try:
+                media = client.clip_upload(video_path, message, thumbnail=img_path)
+                print(f"✅ Posted Reel to Instagram! ID: {media.id}")
+                return media
+            except Exception as e_upload:
+                print(f"⚠️ Upload attempt {attempt} failed ({e_upload}).")
+                if attempt < 3: time.sleep(2 ** attempt)
+        return None
+    except Exception as e:
+        print(f"❌ Instagram upload error: {e}")
+        return None
+
+def clean_and_format_caption(text, story_url=None):
+    if not text: return "Neon Bulletin News Update | @neon.bulletin\n\n#news"
+    lines = text.split('\n')
+    cleaned = ["📡 Neon Bulletin News Update | @neon.bulletin 📡\n"]
+    for line in lines:
+        if "READ FULL STORY" in line or "teds mordare" in line.lower(): continue
+        line = " ".join([w for w in line.split() if not w.startswith("http")])
+        if line.strip(): cleaned.append(line.strip())
+    raw_caption = re.sub(r'\n{3,}', '\n\n', "\n".join(cleaned)).strip()
+    if story_url: raw_caption += f"\n\n🔗 FULL STORY LINK:\n👉 {story_url}"
+    raw_caption += "\n\n🚨 WHAT DO YOU THINK? Drop your thoughts below! 👇\n📌 SAVE this post to stay updated.\n🔔 Follow @neon.bulletin for breaking news!\n\n#news #breakingnews #globalnews #worldnews #neonbulletin"
+    return raw_caption
+
+def process_compilation(posts_group):
+    # posts_group: list of (pid, text, photo_url, story_url)
+    print(f"  🎬 Creating high-grade compilation reel with {len(posts_group)} stories...")
+    temp_dir = f"comp_temp_{int(time.time())}"
+    os.makedirs(temp_dir, exist_ok=True)
+    music_path = os.path.join(os.path.dirname(__file__), "chill-fm.mp3")
+    output_video = f"compilation_{posts_group[-1][0]}.mp4"
     
-    all_posts = {}
+    try:
+        for idx, post in enumerate(posts_group):
+            pid, text, photo_url, story_url = post
+            raw_img = os.path.join(temp_dir, f"raw_{idx+1}.jpg")
+            if photo_url:
+                try:
+                    r = requests.get(photo_url, timeout=15)
+                    if r.status_code == 200:
+                        with open(raw_img, 'wb') as f: f.write(r.content)
+                except: pass
+            if not os.path.exists(raw_img) or os.path.getsize(raw_img) == 0:
+                create_default_bg(raw_img)
+            edited = apply_news_template(raw_img, text)
+            shutil.move(edited, os.path.join(temp_dir, f"img_{idx+1}.jpg"))
+            
+        duration = len(posts_group) * 5
+        cmd = [
+            'ffmpeg', '-y', '-framerate', '1/5', 
+            '-i', os.path.join(temp_dir, 'img_%d.jpg'),
+            '-stream_loop', '-1', '-i', music_path,
+            '-c:v', 'libx264', '-tune', 'stillimage',
+            '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p',
+            '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2',
+            '-shortest', '-t', str(duration), output_video
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        if os.path.exists(output_video):
+            caption = "🚨 GLOBAL PULSE: Top Breaking Stories You Missed 🌍👇\n\n"
+            for i, p in enumerate(posts_group):
+                clean = re.sub(r'(?i)read\s+full(\s+story)?', '', p[1])
+                clean = re.sub(r'(?i)related:\s*join.*', '', clean)
+                clean = re.sub(r'http\S+', '', clean)
+                caption += f"{i+1}️⃣ {clean.strip()[:150]}...\n\n"
+            caption += "🔗 Read the full deep-dive stories at the link in our bio!\n\n👇 Which of these global shifts will have the biggest impact? Drop your thoughts!\n\n#news #breakingnews #globalnews #neonbulletin"
+            
+            thumb = os.path.join(temp_dir, 'img_1.jpg')
+            res = post_to_instagram(caption, output_video, thumb)
+            return res is not None
+        return False
+    except Exception as e:
+        print(f"Compilation error: {e}")
+        return False
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        if os.path.exists(output_video): os.remove(output_video)
+
+def process_individual(post):
+    pid, text, photo_url, story_url = post
+    print(f"  ⏭ Processing individual low-grade post #{pid}...")
+    img_path = f"temp_{pid}.jpg"
+    try:
+        if photo_url:
+            try:
+                r = requests.get(photo_url, timeout=15)
+                if r.status_code == 200:
+                    with open(img_path, 'wb') as f: f.write(r.content)
+            except: pass
+        if not os.path.exists(img_path) or os.path.getsize(img_path) == 0:
+            create_default_bg(img_path)
+            
+        edited = apply_news_template(img_path, text)
+        video = create_news_video(edited, f"news_video_{pid}.mp4")
+        if video:
+            cap = clean_and_format_caption(text, story_url)
+            res = post_to_instagram(cap, video, edited)
+            return res is not None
+        return False
+    finally:
+        for fp in [f"edited_{os.path.basename(img_path)}", f"news_video_{pid}.mp4", img_path]:
+            if os.path.exists(fp) and fp != "default_bg.jpg":
+                try: os.remove(fp)
+                except: pass
+
+def get_recent_posts(username, processed_ids, limit=20):
     current_url = f"https://telegram.me/s/{username}"
-    pages_fetched = 0
-    
-    while pages_fetched < 50: # Safety limit
-        pages_fetched += 1
+    all_posts = []
+    pages = 0
+    while pages < 10 and len(all_posts) < limit:
+        pages += 1
         try:
             r = requests.get(current_url, timeout=10)
             if r.status_code != 200: break
@@ -348,36 +343,22 @@ def get_recent_posts(username, last_id, hours_back=24):
         if not blocks: blocks = html.split('tgme_widget_message ')[1:]
         if not blocks: break
         
-        oldest_dt = datetime.now(timezone.utc)
         min_pid = float('inf')
-        
-        for block in blocks:
+        for block in reversed(blocks):
             m = re.search(r'data-post="[^/]+/(\d+)"', block)
             if not m: continue
             pid = int(m.group(1))
             min_pid = min(min_pid, pid)
-            if pid <= last_id: continue
             
-            # Extract time
-            post_time = datetime.now(timezone.utc)
-            tm = re.search(r'<time[^>]+datetime="([^"]+)"', block)
-            if tm:
-                try: post_time = datetime.fromisoformat(tm.group(1).replace('Z', '+00:00'))
-                except: pass
+            if pid in processed_ids: continue
             
-            oldest_dt = min(oldest_dt, post_time)
-            if post_time < cutoff: continue
-                
-            # Extract text and story link
-            text = "News Update"
-            story_url = None
+            text, story_url, photo_url = "News Update", None, None
             ts = block.find('class="tgme_widget_message_text')
             if ts != -1:
                 te = block.find('>', ts)
                 de = block.find('</div>', te)
                 if te != -1 and de != -1:
                     raw = block[te + 1: de]
-                    # Extract the first link that is not a telegram join channel link
                     urls = re.findall(r'href="([^"]+)"', raw)
                     for u in urls:
                         if "t.me" not in u and "telegram.me" not in u:
@@ -385,151 +366,86 @@ def get_recent_posts(username, last_id, hours_back=24):
                             break
                     raw = raw.replace('<br>', ' ').replace('<br/>', ' ')
                     text = re.sub(r'<[^<]+?>', '', raw).strip()
-                    
-            # Extract photo
-            photo_url = None
             ps = block.find('tgme_widget_message_photo_wrap')
             if ps != -1:
                 pm = re.search(r"background-image:url\('([^']+)'\)", block[ps:ps+1000])
                 if pm: photo_url = pm.group(1)
                 
-            all_posts[pid] = (pid, text, photo_url, story_url)
-            
-        if oldest_dt < cutoff or min_pid <= last_id or min_pid == float('inf'):
-            break
-            
+            if text and "News Update" not in text:
+                all_posts.append((pid, text, photo_url, story_url))
+                if len(all_posts) >= limit: break
+                
         current_url = f"https://telegram.me/s/{username}?before={min_pid}"
         time.sleep(1)
         
-    return sorted(list(all_posts.values()), key=lambda x: x[0])
-
-def clean_and_format_caption(text, story_url=None):
-    if not text:
-        return "Neon Bulletin News Update | @neon.bulletin\n\n#news #breakingnews #globalnews #worldnews #neonbulletin"
-        
-    lines = text.split('\n')
-    cleaned_lines = []
-    
-    # Custom intro credit branding block at the top
-    intro = "📡 Neon Bulletin News Update | @neon.bulletin 📡\n"
-    cleaned_lines.append(intro)
-    
-    for line in lines:
-        line = line.strip()
-        if not line:
-            cleaned_lines.append("")
-            continue
-            
-        # Remove lines that only contain raw URLs or promotional prompts
-        if "READ FULL STORY" in line or "read full story" in line.lower():
-            continue
-        if "neon bulletin" in line.lower() or "t.me/" in line.lower() or "teds mordare" in line.lower():
-            continue
-            
-        # Clean up any residual raw HTTP URLs from the caption text to avoid messy text
-        words = line.split()
-        cleaned_words = [w for w in words if not w.startswith("http://") and not w.startswith("https://")]
-        cleaned_line = " ".join(cleaned_words)
-        
-        if cleaned_line:
-            cleaned_lines.append(cleaned_line)
-            
-    # Reconstruct the caption with elegant spacing
-    raw_caption = "\n".join(cleaned_lines)
-    # Remove consecutive empty lines (max 1 empty line)
-    raw_caption = re.sub(r'\n{3,}', '\n\n', raw_caption).strip()
-    
-    # Add clickable story link information if present
-    link_section = ""
-    if story_url:
-        link_section = f"\n\n🔗 FULL STORY LINK (Copy & paste or check bio):\n👉 {story_url}"
-    else:
-        link_section = "\n\n🔗 Full story link available in bio!"
-        
-    # Custom lively branding/engagement footer engineered for Instagram algorithm (Shares & Saves)
-    footer = (
-        "\n\n🚨 WHAT DO YOU THINK? Drop your thoughts below! 👇"
-        "\n\n📌 SAVE this post to stay updated."
-        "\n✈️ SHARE with a friend who needs to know this!"
-        "\n\n🔔 Follow @neon.bulletin for the fastest breaking news globally! 🌍"
-    )
-    
-    # Append premium professional SEO hashtags (broad + niche)
-    hashtags = "\n\n#news #breakingnews #globalnews #worldnews #viral #explorepage #currentaffairs #update #newsupdate #neonbulletin"
-    return raw_caption + link_section + footer + hashtags
-
-def process_and_post(image_path, text, msg_id, story_url=None):
-    try:
-        edited = apply_news_template(image_path, text)
-        video = create_news_video(edited, f"news_video_{msg_id}.mp4")
-        success = False
-        if video:
-            formatted_caption = clean_and_format_caption(text, story_url)
-            res = post_to_instagram(formatted_caption, video, edited)
-            success = res is not None
-        return success
-    finally:
-        for fp in [f"edited_{os.path.basename(image_path)}", f"news_video_{msg_id}.mp4", image_path]:
-            if fp and os.path.exists(fp):
-                if fp == "default_bg.jpg": continue
-                try: os.remove(fp)
-                except: pass
+    return sorted(all_posts, key=lambda x: x[0])
 
 def main():
     if not IG_USERNAME or not IG_PASSWORD or not SOURCE_CHANNEL:
-        print("❌ Missing config in .env. Check IG_USERNAME, IG_PASSWORD, TG_SOURCE_CHANNEL.")
+        print("❌ Missing config in .env.")
         return
         
-    last_id = get_last_processed_id()
-    print(f"\n{'='*55}\n  📡 Bridge active — monitoring: @{SOURCE_CHANNEL}\n  💾 Resuming from ID: {last_id}\n{'='*55}\n")
+    print(f"\n{'='*55}\n  📡 Bridge active — Dual-Mode Pipeline\n{'='*55}\n")
     
+    # Run once at startup to create a dummy processed_ids if migrating from last_msg_id
+    if not os.path.exists(STATE_FILE) and os.path.exists('last_msg_id.txt'):
+        try:
+            lid = int(open('last_msg_id.txt').read().strip())
+            add_processed_ids(range(1, lid + 1))
+        except: pass
+
     while True:
         try:
-            new_posts = get_recent_posts(SOURCE_CHANNEL, last_id)
+            processed = get_processed_ids()
+            new_posts = get_recent_posts(SOURCE_CHANNEL, processed, limit=15)
+            
             if new_posts:
-                if len(new_posts) > 5:
-                    print(f"\n⚠️ Massive backlog detected ({len(new_posts)} posts). Skipping to the 3 most recent to stay current and avoid spam blocks.")
-                    skipped_posts = new_posts[:-3]
-                    last_id = skipped_posts[-1][0]
-                    set_last_processed_id(last_id)
-                    new_posts = new_posts[-3:]
-                    
-                print(f"\n📬 Processing {len(new_posts)} recent post(s)!")
-                for pid, text, photo_url, story_url in new_posts:
-                    print(f"  ⏭ Processing post #{pid}...")
-                    img_path = "default_bg.jpg"
-                    
-                    if photo_url:
-                        try:
-                            r = requests.get(photo_url, timeout=15)
-                            if r.status_code == 200:
-                                img_path = f"temp_{pid}.jpg"
-                                with open(img_path, 'wb') as f: f.write(r.content)
-                        except: pass
+                print(f"\n📬 Fetched {len(new_posts)} unprocessed post(s)!")
+                
+                high_grade = []
+                low_grade = []
+                for p in new_posts:
+                    if any(s in p[1] for s in HIGH_GRADE_SOURCES):
+                        high_grade.append(p)
+                    else:
+                        low_grade.append(p)
                         
-                    if not os.path.exists(img_path) or os.path.getsize(img_path) == 0:
-                        print(f"  ℹ️ Generating default News background for post #{pid}.")
-                        img_path = "default_bg.jpg"
-                        create_default_bg(img_path)
-                        
-                    success = process_and_post(img_path, text, pid, story_url)
+                # 1. Process High Grade as Compilations (Groups of 3)
+                for i in range(0, len(high_grade), 3):
+                    group = high_grade[i:i+3]
+                    success = process_compilation(group)
                     if not success:
-                        print(f"  ❌ Post #{pid} failed (likely token expiration or action block). Will retry next cycle.")
-                        break # Stop processing to avoid skipping posts
-                        
-                    last_id = pid
-                    set_last_processed_id(last_id)
-                    print(f"  ✅ Finished post #{pid} (Memory updated: {last_id})")
+                        print("  ❌ Compilation upload failed (likely action block). Pausing.")
+                        break
+                    # Mark all as processed
+                    add_processed_ids([p[0] for p in group])
+                    print(f"  ✅ Uploaded compilation! Marked {len(group)} posts as processed.")
                     
-                    # Mandatory delay to bypass Sentry/IAF upload restrictions
-                    import random
-                    wait_time = random.randint(300, 1200)
-                    print(f"  ⏳ Mandatory cooldown: Sleeping for {wait_time // 60}m {wait_time % 60}s to prevent spam blocks...")
+                    wait_time = random.randint(600, 1800)
+                    print(f"  ⏳ Mandatory cooldown: Sleeping {wait_time // 60}m to prevent Sentry blocks...")
                     time.sleep(wait_time)
+                
+                # 2. Process Low Grade Individually
+                for p in low_grade:
+                    # Double check we haven't already processed it just in case
+                    if p[0] in get_processed_ids(): continue
+                    
+                    success = process_individual(p)
+                    if not success:
+                        print(f"  ❌ Post #{p[0]} failed. Pausing.")
+                        break
+                    
+                    add_processed_ids([p[0]])
+                    print(f"  ✅ Uploaded post #{p[0]}.")
+                    
+                    wait_time = random.randint(300, 1200)
+                    print(f"  ⏳ Mandatory cooldown: Sleeping {wait_time // 60}m to prevent Sentry blocks...")
+                    time.sleep(wait_time)
+                    
         except Exception as e:
             print(f"Polling error: {e}")
             
-        time.sleep(30)
+        time.sleep(60)
 
 if __name__ == "__main__":
     main()
