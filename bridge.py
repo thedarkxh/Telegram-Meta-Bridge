@@ -233,7 +233,7 @@ def post_to_instagram(message, video_path, img_path):
         return None
 
 def clean_and_format_caption(text, story_url=None):
-    if not text: return "Neon Bulletin News Update | @neon.bulletin\n\n#news"
+    if not text: return "Neon Bulletin News Update | @neon.bulletin\n\n#news #breakingnews #globalnews #neonbulletin #worldnews #currentaffairs #explorepage #viral #journalism #trending #internationalnews #dailynews #latestnews #newsupdate"
     lines = text.split('\n')
     cleaned = ["📡 Neon Bulletin News Update | @neon.bulletin 📡\n"]
     for line in lines:
@@ -242,7 +242,7 @@ def clean_and_format_caption(text, story_url=None):
         if line.strip(): cleaned.append(line.strip())
     raw_caption = re.sub(r'\n{3,}', '\n\n', "\n".join(cleaned)).strip()
     if story_url: raw_caption += f"\n\n🔗 FULL STORY LINK:\n👉 {story_url}"
-    raw_caption += "\n\n🚨 WHAT DO YOU THINK? Drop your thoughts below! 👇\n📌 SAVE this post to stay updated.\n🔔 Follow @neon.bulletin for breaking news!\n\n#news #breakingnews #globalnews #worldnews #neonbulletin"
+    raw_caption += "\n\n🚨 WHAT DO YOU THINK? Drop your thoughts below! 👇\n📌 SAVE this post to stay updated.\n🔔 Follow @neon.bulletin for breaking news!\n\n#news #breakingnews #globalnews #neonbulletin #worldnews #currentaffairs #explorepage #viral #journalism #trending #internationalnews #dailynews #latestnews #newsupdate"
     return raw_caption
 
 def process_compilation(posts_group):
@@ -287,7 +287,7 @@ def process_compilation(posts_group):
                 clean = re.sub(r'(?i)related:\s*join.*', '', clean)
                 clean = re.sub(r'http\S+', '', clean)
                 caption += f"{i+1}️⃣ {clean.strip()[:150]}...\n\n"
-            caption += "🔗 Read the full deep-dive stories at the link in our bio!\n\n👇 Which of these global shifts will have the biggest impact? Drop your thoughts!\n\n#news #breakingnews #globalnews #neonbulletin"
+            caption += "🔗 Read the full deep-dive stories at the link in our bio!\n\n👇 Which of these global shifts will have the biggest impact? Drop your thoughts!\n\n#news #breakingnews #globalnews #neonbulletin #worldnews #currentaffairs #explorepage #viral #journalism #trending #internationalnews #dailynews #latestnews #newsupdate"
             
             thumb = os.path.join(temp_dir, 'img_1.jpg')
             res = post_to_instagram(caption, output_video, thumb)
