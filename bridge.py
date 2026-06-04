@@ -50,17 +50,22 @@ def get_ig_client():
     global ig_client
     if ig_client is not None:
         return ig_client
-    ig_client = Client()
+        
     if os.path.exists(SESSION_FILE):
         try:
-            ig_client.load_settings(SESSION_FILE)
-            ig_client.user_info_by_username(IG_USERNAME)
+            temp_client = Client()
+            temp_client.load_settings(SESSION_FILE)
+            temp_client.user_info_by_username(IG_USERNAME)
             print("✅ Loaded existing Instagram session.")
+            ig_client = temp_client
             return ig_client
         except Exception as load_err:
-            print(f"⚠️ Failed to load saved session: {load_err}. Re‑logging in.")
+            print(f"⚠️ Failed to load saved session: {load_err}. Forcing fresh login.")
+            try: os.remove(SESSION_FILE)
+            except: pass
 
     print(f"Logging into Instagram as {IG_USERNAME}...")
+    ig_client = Client()
     try:
         ig_client.login(IG_USERNAME, IG_PASSWORD)
         ig_client.dump_settings(SESSION_FILE)
@@ -215,6 +220,7 @@ def create_news_video(image_path, output_path="news_post.mp4"):
     except Exception: return None
 
 def post_to_instagram(message, video_path, img_path):
+    global ig_client
     print(f"📤 Uploading video to Instagram...")
     try:
         client = get_ig_client()
@@ -225,8 +231,17 @@ def post_to_instagram(message, video_path, img_path):
                 print(f"✅ Posted Reel to Instagram! ID: {media.id}")
                 return media
             except Exception as e_upload:
+                err_str = str(e_upload).lower()
                 print(f"⚠️ Upload attempt {attempt} failed ({e_upload}).")
-                if attempt < 3: time.sleep(2 ** attempt)
+                if "login_required" in err_str:
+                    print("🔄 Session expired mid-upload. Wiping session and forcing re-login...")
+                    ig_client = None
+                    try: os.remove(SESSION_FILE)
+                    except: pass
+                    client = get_ig_client()
+                    if not client: return None
+                elif attempt < 3: 
+                    time.sleep(2 ** attempt)
         return None
     except Exception as e:
         print(f"❌ Instagram upload error: {e}")
