@@ -96,7 +96,17 @@ def add_processed_ids(pids):
             f.write(f"{pid}\n")
 
 def get_font(size=24):
-    for p in ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"]:
+    font_paths = [
+        # Android / Termux native fonts
+        "/system/fonts/Roboto-Bold.ttf",
+        "/system/fonts/Roboto-Regular.ttf",
+        "/system/fonts/DroidSans-Bold.ttf",
+        # Linux standard fonts
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", 
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"
+    ]
+    for p in font_paths:
         if os.path.exists(p): return ImageFont.truetype(p, size)
     return ImageFont.load_default()
 
