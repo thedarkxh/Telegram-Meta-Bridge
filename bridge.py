@@ -31,6 +31,7 @@ load_dotenv()
 
 IG_USERNAME = os.getenv('IG_USERNAME')
 IG_PASSWORD = os.getenv('IG_PASSWORD')
+IG_PROXY = os.getenv('IG_PROXY')
 SOURCE_CHANNEL_RAW = os.getenv('TG_SOURCE_CHANNEL')
 SOURCE_CHANNEL = None
 if SOURCE_CHANNEL_RAW:
@@ -54,6 +55,9 @@ def get_ig_client():
     if os.path.exists(SESSION_FILE):
         try:
             temp_client = Client()
+            if IG_PROXY:
+                print(f"🌐 Routing Instagram traffic through proxy: {IG_PROXY}")
+                temp_client.set_proxy(IG_PROXY)
             temp_client.load_settings(SESSION_FILE)
             temp_client.user_info_by_username(IG_USERNAME)
             print("✅ Loaded existing Instagram session.")
@@ -66,6 +70,9 @@ def get_ig_client():
 
     print(f"Logging into Instagram as {IG_USERNAME}...")
     ig_client = Client()
+    if IG_PROXY:
+        print(f"🌐 Routing Instagram traffic through proxy: {IG_PROXY}")
+        ig_client.set_proxy(IG_PROXY)
     try:
         ig_client.login(IG_USERNAME, IG_PASSWORD)
         ig_client.dump_settings(SESSION_FILE)
