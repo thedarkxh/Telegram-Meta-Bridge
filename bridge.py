@@ -32,6 +32,7 @@ load_dotenv()
 IG_USERNAME = os.getenv('IG_USERNAME')
 IG_PASSWORD = os.getenv('IG_PASSWORD')
 IG_PROXY = os.getenv('IG_PROXY')
+IG_SESSIONID = os.getenv('IG_SESSIONID')
 SOURCE_CHANNEL_RAW = os.getenv('TG_SOURCE_CHANNEL')
 SOURCE_CHANNEL = None
 if SOURCE_CHANNEL_RAW:
@@ -73,6 +74,18 @@ def get_ig_client():
     if IG_PROXY:
         print(f"🌐 Routing Instagram traffic through proxy: {IG_PROXY}")
         ig_client.set_proxy(IG_PROXY)
+        
+    # Inject trusted browser cookie to bypass IP/Device blacklists completely
+    if IG_SESSIONID:
+        print("🔑 Injecting trusted Browser Session ID to bypass API blocks...")
+        try:
+            ig_client.login_by_sessionid(IG_SESSIONID)
+            print("✅ Browser session accepted! Logged in successfully.")
+            # We don't save this to SESSION_FILE to avoid corrupting the mobile device settings
+            return ig_client
+        except Exception as e:
+            print(f"❌ Session ID injection failed: {e}. Falling back to standard login...")
+
     try:
         ig_client.login(IG_USERNAME, IG_PASSWORD)
         ig_client.dump_settings(SESSION_FILE)
