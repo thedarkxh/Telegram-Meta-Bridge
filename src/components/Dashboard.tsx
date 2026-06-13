@@ -42,8 +42,8 @@ export default function Dashboard({ navigateTo }: DashboardProps) {
 
   const handleReset = () => {
     if (confirm('Are you sure you want to reset all data? This cannot be undone.')) {
-      localStorage.removeItem('self_assessment_notes');
-      localStorage.removeItem('self_assessment_quiz_sessions');
+      localStorage.removeItem('sa-portal:notes');
+      localStorage.removeItem('sa-portal:quizzes');
       setResetToggle(prev => !prev);
       navigateTo('dashboard');
     }
