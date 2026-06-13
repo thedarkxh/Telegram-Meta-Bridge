@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    @apply bg-[#090d16] text-slate-100 font-sans antialiased min-h-screen selection:bg-indigo-500/30;
+  }
+  
+  /* Reset some create-vite root styling if needed */
+  #root {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    text-align: left;
+    border-inline: none;
+    min-height: 100vh;
+    display: block;
+    box-sizing: border-box;
+  }
+}
+
+@layer utilities {
+  .glass-panel {
+    background: rgba(17, 24, 39, 0.65);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37), inset 0 1px 1px 0 rgba(255, 255, 255, 0.05);
+  }
+  
+  .glass-input {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    @apply transition-all duration-200 focus:outline-none focus:border-indigo-500/50 focus:ring-2 focus:ring-indigo-500/25 text-slate-100 placeholder-slate-500 rounded-lg px-4 py-2;
+  }
+
+  .glass-button-primary {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.8) 0%, rgba(168, 85, 247, 0.8) 100%);
+    @apply text-white font-medium px-4 py-2 rounded-lg transition-all duration-200 hover:brightness-110 active:scale-95 shadow-md shadow-indigo-500/10 hover:shadow-indigo-500/20 border border-white/10;
+  }
+
+  .glass-button-secondary {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    @apply text-slate-200 font-medium px-4 py-2 rounded-lg transition-all duration-200 hover:bg-white/5 active:scale-95;
+  }
+
+  .glass-card-interactive {
+    background: rgba(17, 24, 39, 0.65);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37), inset 0 1px 1px 0 rgba(255, 255, 255, 0.05);
+    @apply transition-all duration-300 hover:-translate-y-1 hover:border-indigo-500/30 hover:shadow-indigo-500/5 cursor-pointer;
+  }
+  
+  /* Mastery Status Colors */
+  .mastery-bg-0 { @apply bg-slate-600/20 text-slate-400 border border-slate-500/30; }
+  .mastery-bg-1 { @apply bg-rose-600/20 text-rose-400 border border-rose-500/30; }
+  .mastery-bg-2 { @apply bg-orange-600/20 text-orange-400 border border-orange-500/30; }
+  .mastery-bg-3 { @apply bg-amber-600/20 text-amber-400 border border-amber-500/30; }
+  .mastery-bg-4 { @apply bg-blue-600/20 text-blue-400 border border-blue-500/30; }
+  .mastery-bg-5 { @apply bg-emerald-600/20 text-emerald-400 border border-emerald-500/30; }
+  
+  /* Custom Scrollbar for premium feel */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #090d16;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #1e293b;
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #6366f1;
+  }
+}
