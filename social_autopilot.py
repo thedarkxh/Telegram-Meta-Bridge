@@ -7,7 +7,7 @@ if os.path.isdir(venv_path) and venv_path not in sys.path:
 import time
 import requests
 import re
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from instagrapi import Client
 
 # Load environment
@@ -35,21 +35,9 @@ IG_BUSINESS_SESSION_FILE = 'ig_business_session.json'
 GITHUB_REPO = os.getenv('GITHUB_REPO') # e.g. owner/repo
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 
-STATE_FILE = 'autopilot_processed_commits.txt'
-
 def log(msg, level="INFO"):
     print(f"[{datetime.now().isoformat()}] [{level}] [Autopilot] {msg}")
     sys.stdout.flush()
-
-def get_processed_commits():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, 'r') as f:
-            return set(line.strip() for line in f if line.strip())
-    return set()
-
-def add_processed_commit(sha):
-    with open(STATE_FILE, 'a') as f:
-        f.write(f"{sha}\n")
 
 # LinkedIn Publishing
 def post_to_linkedin(text):
@@ -183,17 +171,24 @@ def check_github_commits():
             return
             
         commits = r.json()
-        processed = get_processed_commits()
+        now = datetime.now(timezone.utc)
         
-        # Process from oldest to newest
-        for commit in reversed(commits[:5]):
+        # Process from oldest to newest (up to 10 latest commits)
+        for commit in reversed(commits[:10]):
             sha = commit.get("sha")
-            if sha in processed: continue
+            date_str = commit.get("commit", {}).get("author", {}).get("date", "")
+            
+            # Check if commit is from the last 65 minutes
+            if date_str:
+                date_str = date_str.replace("Z", "+00:00")
+                commit_date = datetime.fromisoformat(date_str)
+                if (now - commit_date).total_seconds() > 65 * 60:
+                    continue # Skip old commits
             
             message = commit.get("commit", {}).get("message", "")
             author = commit.get("commit", {}).get("author", {}).get("name", "Developer")
             
-            log(f"Found new commit: {sha[:7]} by {author}")
+            log(f"Found new commit within the last hour: {sha[:7]} by {author}")
             
             # Format update message
             post_content = (
@@ -210,19 +205,18 @@ def check_github_commits():
             ig_success = post_to_business_instagram(post_content)
             
             if li_success or ig_success:
-                add_processed_commit(sha)
+                log(f"Successfully processed {sha[:7]}")
                 
     except Exception as e:
         log(f"GitHub monitoring error: {e}", "ERROR")
 
 def main():
-    log("Social Autopilot service started.")
-    while True:
-        try:
-            check_github_commits()
-        except Exception as e:
-            log(f"Error in autopilot loop: {e}", "ERROR")
-        time.sleep(600) # Check every 10 minutes
+    log("Social Autopilot (GitHub Action Mode) started.")
+    try:
+        check_github_commits()
+    except Exception as e:
+        log(f"Error checking commits: {e}", "ERROR")
+    log("Run complete.")
 
 if __name__ == "__main__":
     main()
