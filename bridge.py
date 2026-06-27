@@ -485,7 +485,8 @@ def get_recent_posts(username, processed_ids, limit=200):
                             story_url = u
                             break
                     raw = raw.replace('<br>', ' ').replace('<br/>', ' ')
-                    text = re.sub(r'<[^<]+?>', '', raw).strip()
+                    import html
+                    text = html.unescape(re.sub(r'<[^<]+?>', '', raw).strip())
             ps = block.find('tgme_widget_message_photo_wrap')
             vs = block.find('tgme_widget_message_video_thumb')
             if ps != -1:
