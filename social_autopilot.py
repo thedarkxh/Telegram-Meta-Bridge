@@ -1,5 +1,9 @@
 import os
 import sys
+# Ensure virtual environment packages are available when running script directly
+venv_path = os.path.join(os.path.dirname(__file__), 'venv', 'lib', f'python{sys.version_info.major}.{sys.version_info.minor}', 'site-packages')
+if os.path.isdir(venv_path) and venv_path not in sys.path:
+    sys.path.insert(0, venv_path)
 import time
 import requests
 import re
