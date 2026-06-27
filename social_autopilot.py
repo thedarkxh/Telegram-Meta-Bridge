@@ -69,7 +69,6 @@ def post_to_business_instagram(text):
         # Business Instagram standard posting (Text-only or simple placeholder image)
         # Note: Instagram requires a media attachment, so we generate a simple image dynamically
         from PIL import Image, ImageDraw, ImageFont
-        import os
         def get_font(size=40):
             font_paths = [
                 "/system/fonts/Roboto-Bold.ttf",
