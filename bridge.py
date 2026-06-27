@@ -228,6 +228,10 @@ def apply_news_template(image_path, text):
         if source_text:
             draw.text((40, 1820), source_text, fill=(200, 200, 200, 220), font=get_font(24))
             
+        # Draw a clean CTA box at the bottom of the Reel
+        draw.rectangle([240, 1680, 840, 1750], fill=(255, 255, 255, 30), outline=(255, 255, 255, 100), width=1)
+        draw.text((320, 1695), "👉 Follow @neon.bulletin for Daily News", fill=(255, 255, 255, 230), font=get_font(22))
+            
         out = f"edited_{os.path.basename(image_path)}"
         canvas.convert('RGB').save(out, 'JPEG', quality=95)
         return out
@@ -245,7 +249,7 @@ def create_news_video(image_path, output_path="news_post.mp4"):
             '-stream_loop', '-1', '-i', music_path,
             '-c:v', 'libx264', '-tune', 'stillimage',
             '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p',
-            '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2',
+            '-vf', "zoompan=z='min(zoom+0.0015,1.5)':d=125:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)',scale=1080:1920",
             '-shortest', '-t', '5', output_path
         ]
         r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
