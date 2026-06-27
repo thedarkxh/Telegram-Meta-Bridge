@@ -26,9 +26,9 @@ load_dotenv()
 
 
 
-IG_BUSINESS_USERNAME = os.getenv('IG_BUSINESS_USERNAME')
-IG_BUSINESS_PASSWORD = os.getenv('IG_BUSINESS_PASSWORD')
-IG_BUSINESS_SESSIONID = os.getenv('IG_BUSINESS_SESSIONID')
+IG_USERNAME = os.getenv('IG_USERNAME')
+IG_PASSWORD = os.getenv('IG_PASSWORD')
+IG_SESSIONID = os.getenv('IG_SESSIONID')
 IG_BUSINESS_SESSION_FILE = 'ig_business_session.json'
 
 GITHUB_REPO = os.getenv('GITHUB_REPO') # e.g. owner/repo
@@ -42,16 +42,16 @@ def log(msg, level="INFO"):
 
 # Business Instagram Publishing
 def post_to_business_instagram(text):
-    if not IG_BUSINESS_SESSIONID and (not IG_BUSINESS_USERNAME or not IG_BUSINESS_PASSWORD):
-        log("Instagram Business credentials/session not set. Skipping.", "WARNING")
+    if not IG_SESSIONID and (not IG_USERNAME or not IG_PASSWORD):
+        log("Instagram credentials/session not set. Skipping.", "WARNING")
         return False
 
     client = Client()
     
-    if IG_BUSINESS_SESSIONID:
+    if IG_SESSIONID:
         log("Injecting trusted Browser Session ID to bypass API blocks...")
         try:
-            client.login_by_sessionid(IG_BUSINESS_SESSIONID)
+            client.login_by_sessionid(IG_SESSIONID)
             log("Browser session accepted! Logged in successfully.")
         except Exception as e:
             log(f"Session ID injection failed: {e}. Falling back to standard login...", "WARNING")
@@ -68,11 +68,11 @@ def post_to_business_instagram(text):
             
     if not client.user_id:
         try:
-            client.login(IG_BUSINESS_USERNAME, IG_BUSINESS_PASSWORD)
+            client.login(IG_USERNAME, IG_PASSWORD)
             client.dump_settings(IG_BUSINESS_SESSION_FILE)
-            log("Instagram Business login successful!")
+            log("Instagram login successful!")
         except Exception as e:
-            log(f"Instagram Business login failed: {e}", "ERROR")
+            log(f"Instagram login failed: {e}", "ERROR")
             return False
 
     try:
