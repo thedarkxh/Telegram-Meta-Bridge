@@ -24,8 +24,6 @@ jobs:
 
       - name: Run Autopilot Script
         env:
-          LINKEDIN_ACCESS_TOKEN: ${{ secrets.LINKEDIN_ACCESS_TOKEN }}
-          LINKEDIN_PERSON_URN: ${{ secrets.LINKEDIN_PERSON_URN }}
           IG_BUSINESS_USERNAME: ${{ secrets.IG_BUSINESS_USERNAME }}
           IG_BUSINESS_PASSWORD: ${{ secrets.IG_BUSINESS_PASSWORD }}
           GITHUB_REPO: ${{ github.repository }}

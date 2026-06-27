@@ -24,9 +24,7 @@ def load_dotenv():
 
 load_dotenv()
 
-# Config
-LINKEDIN_ACCESS_TOKEN = os.getenv('LINKEDIN_ACCESS_TOKEN')
-LINKEDIN_PERSON_URN = os.getenv('LINKEDIN_PERSON_URN') # e.g. urn:li:person:abcdef
+
 
 IG_BUSINESS_USERNAME = os.getenv('IG_BUSINESS_USERNAME')
 IG_BUSINESS_PASSWORD = os.getenv('IG_BUSINESS_PASSWORD')
@@ -39,44 +37,7 @@ def log(msg, level="INFO"):
     print(f"[{datetime.now().isoformat()}] [{level}] [Autopilot] {msg}")
     sys.stdout.flush()
 
-# LinkedIn Publishing
-def post_to_linkedin(text):
-    if not LINKEDIN_ACCESS_TOKEN or not LINKEDIN_PERSON_URN:
-        log("LinkedIn credentials not set. Skipping.", "WARNING")
-        return False
-    
-    url = "https://api.linkedin.com/v2/ugcPosts"
-    headers = {
-        "Authorization": f"Bearer {LINKEDIN_ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-        "X-Restli-Protocol-Version": "2.0.0"
-    }
-    payload = {
-        "author": LINKEDIN_PERSON_URN,
-        "lifecycleState": "PUBLISHED",
-        "specificContent": {
-            "com.linkedin.ugc.ShareContent": {
-                "shareCommentary": {
-                    "text": text
-                },
-                "shareMediaCategory": "NONE"
-            }
-        },
-        "visibility": {
-            "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
-        }
-    }
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=15)
-        if response.status_code in (200, 201):
-            log("Successfully posted update to LinkedIn!")
-            return True
-        else:
-            log(f"Failed to post to LinkedIn: {response.status_code} - {response.text}", "ERROR")
-            return False
-    except Exception as e:
-        log(f"LinkedIn posting error: {e}", "ERROR")
-        return False
+
 
 # Business Instagram Publishing
 def post_to_business_instagram(text):
@@ -200,11 +161,10 @@ def check_github_commits():
                 f"#github #git #devops #cicd #automation #softwareengineering #coding"
             )
             
-            # Publish to LinkedIn and Business Instagram
-            li_success = post_to_linkedin(post_content)
+            # Publish to Business Instagram
             ig_success = post_to_business_instagram(post_content)
             
-            if li_success or ig_success:
+            if ig_success:
                 log(f"Successfully processed {sha[:7]}")
                 
     except Exception as e:
