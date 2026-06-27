@@ -26,6 +26,7 @@ jobs:
         env:
           IG_BUSINESS_USERNAME: ${{ secrets.IG_BUSINESS_USERNAME }}
           IG_BUSINESS_PASSWORD: ${{ secrets.IG_BUSINESS_PASSWORD }}
+          IG_BUSINESS_SESSIONID: ${{ secrets.IG_BUSINESS_SESSIONID }}
           GITHUB_REPO: ${{ github.repository }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python social_autopilot.py
