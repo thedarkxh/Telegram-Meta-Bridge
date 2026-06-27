@@ -239,22 +239,77 @@ def apply_news_template(image_path, text):
         print(f"Error applying template: {e}")
         return image_path
 
-def create_news_video(image_path, output_path="news_post.mp4"):
+def create_news_video(image_path, output_path="news_post.mp4", raw_text=""):
     try:
-        print(f"Compiling 5s video with embedded music...")
+        import re
+        from gtts import gTTS
+        
+        print(f"Compiling video with embedded music and TTS...")
         if os.path.exists(output_path): os.remove(output_path)
         music_path = os.path.join(os.path.dirname(__file__), "chill-fm.mp3")
-        cmd = [
-            'ffmpeg', '-y', '-loop', '1', '-i', image_path,
-            '-stream_loop', '-1', '-i', music_path,
-            '-c:v', 'libx264', '-tune', 'stillimage',
-            '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p',
-            '-vf', "zoompan=z='min(zoom+0.0015,1.5)':d=125:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)',scale=1080:1920",
-            '-shortest', '-t', '5', output_path
-        ]
+        
+        tts_audio = None
+        duration = '5'
+        
+        if raw_text:
+            headline_base = raw_text
+            source_match = re.search(r'(?i)(source:\s*[^\n]+)', raw_text)
+            if source_match: headline_base = headline_base.replace(source_match.group(1), "")
+            headline_base = re.sub(r'(?i)read\s+full(\s+story)?', '', headline_base)
+            headline_base = re.sub(r'(?i)related:\s*join.*', '', headline_base)
+            headline_base = " ".join(w for w in headline_base.split() if not w.startswith("http") and not w.startswith("@"))
+            clean_headline = re.sub(r'[\U00010000-\U0010ffff]', '', headline_base)
+            clean_headline = " ".join(clean_headline.split()).strip()
+            clean_headline = re.sub(r'(?i)^\s*breaking\s+news\s*', '', clean_headline).strip()
+            clean_headline = clean_headline[:180] or "News Update"
+            
+            if clean_headline and clean_headline != "News Update":
+                try:
+                    tts = gTTS(text=clean_headline, lang='en', tld='co.uk')
+                    tts_audio = f"tts_temp_{os.path.basename(image_path)}.mp3"
+                    tts.save(tts_audio)
+                    # Get TTS duration to ensure video is long enough to finish reading
+                    dur_out = subprocess.check_output(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', tts_audio], text=True).strip()
+                    if dur_out:
+                        tts_dur = float(dur_out)
+                        if tts_dur > 5.0:
+                            duration = str(int(tts_dur) + 1)
+                except Exception as e:
+                    print(f"TTS generation failed: {e}")
+                    tts_audio = None
+
+        if tts_audio:
+            zoomd = int(float(duration) * 25)
+            cmd = [
+                'ffmpeg', '-y', '-loop', '1', '-i', image_path,
+                '-stream_loop', '-1', '-i', music_path,
+                '-i', tts_audio,
+                '-filter_complex', f"[1:a]volume=0.2[bg];[2:a]volume=1.8[voice];[bg][voice]amix=inputs=2:duration=first:dropout_transition=2",
+                '-c:v', 'libx264', '-tune', 'stillimage',
+                '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p',
+                '-vf', f"zoompan=z='min(zoom+0.0015,1.5)':d={zoomd}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)',scale=1080:1920",
+                '-t', duration, output_path
+            ]
+        else:
+            cmd = [
+                'ffmpeg', '-y', '-loop', '1', '-i', image_path,
+                '-stream_loop', '-1', '-i', music_path,
+                '-c:v', 'libx264', '-tune', 'stillimage',
+                '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p',
+                '-vf', "zoompan=z='min(zoom+0.0015,1.5)':d=125:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)',scale=1080:1920",
+                '-shortest', '-t', '5', output_path
+            ]
+            
         r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        if tts_audio:
+            try: os.remove(tts_audio)
+            except: pass
+            
         return output_path if r.returncode == 0 else None
-    except Exception: return None
+    except Exception as e:
+        print(f"Error creating video: {e}")
+        return None
 
 def post_to_instagram(message, video_path, img_path):
     global ig_client
@@ -367,7 +422,7 @@ def process_individual(post):
             create_default_bg(img_path)
             
         edited = apply_news_template(img_path, text)
-        video = create_news_video(edited, f"news_video_{pid}.mp4")
+        video = create_news_video(edited, f"news_video_{pid}.mp4", text)
         if video:
             cap = clean_and_format_caption(text, story_url)
             res = post_to_instagram(cap, video, edited)
