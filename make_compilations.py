@@ -27,8 +27,8 @@ def download_image(url, save_path):
 
 def make_compilations():
     print("📡 Fetching recent news from Telegram...")
-    # Using 0 as last_id to fetch the most recent batch
-    posts = get_recent_posts(SOURCE_CHANNEL, 0)
+    # Using empty set to fetch the most recent batch
+    posts = get_recent_posts(SOURCE_CHANNEL, set())
     
     if not posts:
         print("❌ No posts found.")

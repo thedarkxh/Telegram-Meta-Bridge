@@ -12,13 +12,14 @@ import subprocess
 import shutil
 import random
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urlparse
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from instagrapi import Client, exceptions
 
 def load_dotenv():
-    dotenv_path = '.env'
+    dotenv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
     if os.path.exists(dotenv_path):
-        print("Loading configuration from local .env file...")
+        print(f"Loading configuration from {dotenv_path}...")
         with open(dotenv_path, 'r') as f:
             for line in f:
                 line = line.strip()
@@ -32,6 +33,7 @@ load_dotenv()
 IG_USERNAME = os.getenv('IG_USERNAME')
 IG_PASSWORD = os.getenv('IG_PASSWORD')
 IG_PROXY = os.getenv('IG_PROXY')
+TG_PROXY = os.getenv('TG_PROXY') or IG_PROXY
 IG_SESSIONID = os.getenv('IG_SESSIONID')
 SOURCE_CHANNEL_RAW = os.getenv('TG_SOURCE_CHANNEL')
 SOURCE_CHANNEL = None
@@ -42,8 +44,9 @@ if SOURCE_CHANNEL_RAW:
     else:
         SOURCE_CHANNEL = cleaned.lstrip('@').split('/')[-1]
 
-STATE_FILE = 'processed_ids.txt'
-SESSION_FILE = 'ig_session.json'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATE_FILE = os.path.join(BASE_DIR, 'processed_ids.txt')
+SESSION_FILE = os.path.join(BASE_DIR, 'ig_session.json')
 HIGH_GRADE_SOURCES = ["BBC News", "Reuters", "Bloomberg", "AP News", "The New York Times", "The Wall Street Journal", "The Guardian"]
 
 ig_client = None
@@ -372,18 +375,89 @@ def process_individual(post):
                 try: os.remove(fp)
                 except: pass
 
+def _fetch_telegram_page(url, proxies, timeout=20):
+    """Try fetching a Telegram page with multi-domain fallback and retries."""
+    # Extract the path from the URL so we can try alternate domains
+    parsed = urlparse(url)
+    path = parsed.path
+    if parsed.query:
+        path += f"?{parsed.query}"
+    
+    domains = ["t.me", "telegram.me"]
+    last_error = None
+    
+    for domain in domains:
+        attempt_url = f"https://{domain}{path}"
+        for attempt in range(1, 4):  # 3 retries per domain
+            try:
+                r = requests.get(attempt_url, timeout=timeout, proxies=proxies, 
+                                 headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
+                if r.status_code == 200:
+                    return r
+                elif r.status_code == 429:
+                    wait = min(2 ** attempt * 5, 60)
+                    print(f"  ⏳ Rate-limited by {domain} (429). Waiting {wait}s...")
+                    time.sleep(wait)
+                else:
+                    print(f"  ⚠️ {domain} returned HTTP {r.status_code}")
+                    break  # Try next domain
+            except requests.exceptions.ProxyError as e:
+                print(f"  ❌ Proxy error connecting to {domain}: {e}")
+                last_error = e
+                break  # Proxy is broken, no point retrying
+            except (requests.exceptions.ConnectTimeout, requests.exceptions.ConnectionError) as e:
+                last_error = e
+                if attempt < 3:
+                    wait = 2 ** attempt
+                    print(f"  ⚠️ {domain} connection failed (attempt {attempt}/3). Retrying in {wait}s...")
+                    time.sleep(wait)
+                else:
+                    print(f"  ❌ {domain} unreachable after 3 attempts.")
+            except requests.exceptions.RequestException as e:
+                last_error = e
+                print(f"  ❌ Request error for {domain}: {e}")
+                break
+    
+    # All domains failed — print diagnostic
+    if last_error:
+        err_name = type(last_error).__name__
+        if "Timeout" in err_name or "Connection" in err_name:
+            print(f"\n{'='*60}")
+            print(f"  🚫 TELEGRAM IS BLOCKED ON THIS NETWORK")
+            print(f"  All Telegram domains are unreachable.")
+            print(f"  Error: {err_name}")
+            print(f"")
+            print(f"  FIX: Set TG_PROXY in your .env file:")
+            print(f"    TG_PROXY=socks5://your-proxy:port")
+            print(f"    TG_PROXY=http://your-proxy:port")
+            print(f"{'='*60}\n")
+    return None
+
 def get_recent_posts(username, processed_ids, limit=200):
-    current_url = f"https://telegram.me/s/{username}"
+    current_url = f"https://t.me/s/{username}"
     all_posts = []
     pages = 0
-    # Fetch up to 10 pages (200 posts) to ensure we capture all high-grade news in backlogs
+    proxies = {"http": TG_PROXY, "https": TG_PROXY} if TG_PROXY else None
+    
+    if TG_PROXY:
+        print(f"🌐 Routing Telegram traffic through proxy: {TG_PROXY}")
+    
+    consecutive_failures = 0
+    max_consecutive_failures = 3
+    
     while pages < 10 and len(all_posts) < limit:
         pages += 1
-        try:
-            r = requests.get(current_url, timeout=10)
-            if r.status_code != 200: break
-            html = r.text
-        except: break
+        
+        r = _fetch_telegram_page(current_url, proxies)
+        if r is None:
+            consecutive_failures += 1
+            if consecutive_failures >= max_consecutive_failures:
+                print(f"  ❌ {max_consecutive_failures} consecutive page failures. Stopping pagination.")
+                break
+            continue
+        
+        consecutive_failures = 0  # Reset on success
+        html = r.text
             
         blocks = html.split('<div class="tgme_widget_message text_not_supported_wrap js-widget_message"')[1:]
         if not blocks: blocks = html.split('tgme_widget_message ')[1:]
@@ -413,15 +487,19 @@ def get_recent_posts(username, processed_ids, limit=200):
                     raw = raw.replace('<br>', ' ').replace('<br/>', ' ')
                     text = re.sub(r'<[^<]+?>', '', raw).strip()
             ps = block.find('tgme_widget_message_photo_wrap')
+            vs = block.find('tgme_widget_message_video_thumb')
             if ps != -1:
                 pm = re.search(r"background-image:url\('([^']+)'\)", block[ps:ps+1000])
+                if pm: photo_url = pm.group(1)
+            elif vs != -1:
+                pm = re.search(r"background-image:url\('([^']+)'\)", block[vs:vs+1000])
                 if pm: photo_url = pm.group(1)
                 
             if text and "News Update" not in text:
                 all_posts.append((pid, text, photo_url, story_url))
                 if len(all_posts) >= limit: break
                 
-        current_url = f"https://telegram.me/s/{username}?before={min_pid}"
+        current_url = f"https://t.me/s/{username}?before={min_pid}"
         time.sleep(1)
         
     return sorted(all_posts, key=lambda x: x[0])
