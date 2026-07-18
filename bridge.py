@@ -13,7 +13,7 @@ import shutil
 import random
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps
 from instagrapi import Client, exceptions
 
 def load_dotenv():
@@ -47,56 +47,158 @@ if SOURCE_CHANNEL_RAW:
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(BASE_DIR, 'processed_ids.txt')
 SESSION_FILE = os.path.join(BASE_DIR, 'ig_session.json')
+HEADLINES_FILE = os.path.join(BASE_DIR, 'processed_headlines.txt')
+
+def normalize_headline(headline):
+    return re.sub(r'[^a-zA-Z0-9]', '', headline).lower().strip()
+
+def get_processed_headlines():
+    if os.path.exists(HEADLINES_FILE):
+        try:
+            return set(x.strip() for x in open(HEADLINES_FILE, encoding='utf-8') if x.strip())
+        except: pass
+    return set()
+
+def add_processed_headline(normalized_hl):
+    try:
+        with open(HEADLINES_FILE, 'a', encoding='utf-8') as f:
+            f.write(f"{normalized_hl}\n")
+    except: pass
 HIGH_GRADE_SOURCES = ["BBC News", "Reuters", "Bloomberg", "AP News", "The New York Times", "The Wall Street Journal", "The Guardian"]
 
-ig_client = None
+class InstagramUploader:
+    def __init__(self, username, password, session_id, session_file):
+        self.username = username
+        self.password = password
+        self.session_id = session_id
+        self.session_file = os.path.join(BASE_DIR, session_file)
+        self.client = None
+        self.tried_challenge_codes = set()
 
-def get_ig_client():
-    global ig_client
-    if ig_client is not None:
-        return ig_client
+    def challenge_code_handler(self, username, choice):
+        import sys
+        import time
+        import os
         
-    if os.path.exists(SESSION_FILE):
-        try:
-            temp_client = Client()
-            if IG_PROXY:
-                print(f"🌐 Routing Instagram traffic through proxy: {IG_PROXY}")
-                temp_client.set_proxy(IG_PROXY)
-            temp_client.load_settings(SESSION_FILE)
-            temp_client.user_info_by_username(IG_USERNAME)
-            print("✅ Loaded existing Instagram session.")
-            ig_client = temp_client
-            return ig_client
-        except Exception as load_err:
-            print(f"⚠️ Failed to load saved session: {load_err}. Forcing fresh login.")
-            try: os.remove(SESSION_FILE)
-            except: pass
+        # Interactive Mode
+        if sys.stdin.isatty():
+            code = input(f"Enter challenge code for {username}: ")
+            if not code.isdigit() or len(code) < 6:
+                print("Invalid code format.")
+                return ""
+            if code in self.tried_challenge_codes:
+                print("Code already tried.")
+                return ""
+            self.tried_challenge_codes.add(code)
+            return code
+            
+        # Non-Interactive Environment Polling
+        print(f"Waiting for challenge code in environment variables for {username}...")
+        
+        def reload_env():
+            try:
+                if 'load_dotenv' in globals():
+                    globals()['load_dotenv']()
+                else:
+                    from bridge import load_dotenv
+                    load_dotenv()
+            except:
+                pass
+                
+        def check_env():
+            code = None
+            if username == "neon.bulletin":
+                code = os.environ.get('IG_CHALLENGE_CODE_STANDARD')
+            elif username == "samar.root":
+                code = os.environ.get('IG_CHALLENGE_CODE_TECH')
+            if not code:
+                code = os.environ.get('IG_CHALLENGE_CODE')
+            return code
 
-    print(f"Logging into Instagram as {IG_USERNAME}...")
-    ig_client = Client()
-    if IG_PROXY:
-        print(f"🌐 Routing Instagram traffic through proxy: {IG_PROXY}")
-        ig_client.set_proxy(IG_PROXY)
+        reload_env()
+        for _ in range(18):
+            code = check_env()
+            if code and code not in self.tried_challenge_codes:
+                self.tried_challenge_codes.add(code)
+                return code
+            time.sleep(1)
+            reload_env()
+            
+        return ""
+
+    def get_client(self):
+        if self.client is not None:
+            return self.client
+            
+        desktop_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            
+        if os.path.exists(self.session_file):
+            try:
+                temp_client = Client()
+                temp_client.user_agent = desktop_ua
+                temp_client.challenge_code_handler = self.challenge_code_handler
+                if IG_PROXY:
+                    temp_client.set_proxy(IG_PROXY)
+                temp_client.load_settings(self.session_file)
+                # Bypass user_info_by_username to avoid 429 rate limit hanging
+                self.client = temp_client
+                return self.client
+            except Exception as load_err:
+                print(f"Failed to load saved session for {self.username}: {load_err}.")
+                try: os.remove(self.session_file)
+                except: pass
+
+        self.client = Client()
+        self.client.user_agent = desktop_ua
+        self.client.challenge_code_handler = self.challenge_code_handler
         
-    # Inject trusted browser cookie to bypass IP/Device blacklists completely
-    if IG_SESSIONID:
-        print("🔑 Injecting trusted Browser Session ID to bypass API blocks...")
+        if IG_PROXY:
+            self.client.set_proxy(IG_PROXY)
+            
+        if self.session_id:
+            try:
+                self.client.login_by_sessionid(self.session_id)
+                self.client.dump_settings(self.session_file)
+                return self.client
+            except Exception as e:
+                print(f"Session ID injection failed: {e}.")
+
+        if not self.password:
+            return None
+
         try:
-            ig_client.login_by_sessionid(IG_SESSIONID)
-            print("✅ Browser session accepted! Logged in successfully.")
-            # We don't save this to SESSION_FILE to avoid corrupting the mobile device settings
-            return ig_client
+            self.client.login(self.username, self.password)
+            self.client.dump_settings(self.session_file)
+            return self.client
         except Exception as e:
-            print(f"❌ Session ID injection failed: {e}. Falling back to standard login...")
+            print(f"Instagram login failed for {self.username}: {e}")
+            self.client = None
+            return None
 
-    try:
-        ig_client.login(IG_USERNAME, IG_PASSWORD)
-        ig_client.dump_settings(SESSION_FILE)
-        print("✅ Instagram login successful! Session saved.")
-        return ig_client
-    except Exception as e:
-        print(f"❌ Instagram login failed: {e}")
-        ig_client = None
+    def post_reel(self, message, video_path, img_path):
+        client = self.get_client()
+        if not client: return None
+        print(f"  📝 Caption prepared ({len(message)} chars):\n{'-'*30}\n{message}\n{'-'*30}")
+        print(f"  ⬆️ Uploading Reel to @{self.username}...")
+        for attempt in range(1, 4):
+            try:
+                media = client.clip_upload(video_path, message, thumbnail=img_path)
+                print(f"  🎉 Successfully uploaded Reel to @{self.username}! Media ID: {media.pk}")
+                return media
+            except Exception as e_upload:
+                err_str = str(e_upload).lower()
+                print(f"  ⚠️ Upload attempt {attempt} failed for @{self.username}: {e_upload}")
+                if "login_required" in err_str:
+                    print(f"  🔄 Session invalid! Relogging in for @{self.username}...")
+                    self.client = None
+                    try: os.remove(self.session_file)
+                    except: pass
+                    client = self.get_client()
+                    if not client: return None
+                elif attempt < 3: 
+                    import time
+                    time.sleep(2 ** attempt)
+        print(f"  ❌ All upload attempts failed for @{self.username}.")
         return None
 
 def get_processed_ids():
@@ -134,11 +236,14 @@ def create_default_bg(output_path="default_bg.jpg"):
         r, g, b = int(15 + (y/h)*20), int(25 + (y/h)*30), int(45 + (y/h)*50)
         draw.line([(0, y), (w, y)], fill=(r, g, b))
     img.save(output_path, quality=95)
+    img.close()
     return output_path
-
-def apply_news_template(image_path, text):
+   # Image Compositing Template
+def apply_news_template(image_path, text, account_username="samar.root", is_carousel=False):
     try:
-        original_img = Image.open(image_path).convert('RGBA')
+        print(f"  🎨 Applying graphical template to {image_path} for @{account_username}...")
+        with Image.open(image_path) as original_img:
+            original_img = ImageOps.exif_transpose(original_img).convert('RGBA')
         w_orig, h_orig = original_img.size
         target_w, target_h = 1080, 1920
         img_ratio = w_orig / h_orig
@@ -205,8 +310,21 @@ def apply_news_template(image_path, text):
         clean_headline = clean_headline[:180] or "News Update"
         
         RED = (186, 12, 47, 255)
-        draw.rectangle([40, 1270, 360, 1325], fill=RED)
-        draw.text((65, 1280), "BREAKING NEWS", fill=(255, 255, 255, 255), font=get_font(30))
+        BLUE = (12, 47, 186, 255)
+        GREEN = (47, 186, 12, 255)
+        
+        if "tech" in account_username:
+            banner_color = BLUE
+            banner_title = "TECH NEWS"
+        elif "global" in account_username:
+            banner_color = GREEN
+            banner_title = "GLOBAL NEWS"
+        else:
+            banner_color = RED
+            banner_title = "BREAKING NEWS"
+            
+        draw.rectangle([40, 1270, 360, 1325], fill=banner_color)
+        draw.text((65, 1280), banner_title, fill=(255, 255, 255, 255), font=get_font(30))
         
         font_hl = get_font(40)
         lines, cur = [], []
@@ -229,13 +347,38 @@ def apply_news_template(image_path, text):
             draw.text((40, 1820), source_text, fill=(200, 200, 200, 220), font=get_font(24))
             
         # Draw a clean CTA box at the bottom of the Reel
-        draw.rectangle([240, 1680, 840, 1750], fill=(255, 255, 255, 30), outline=(255, 255, 255, 100), width=1)
-        draw.text((320, 1695), "👉 Follow @neon.bulletin for Daily News", fill=(255, 255, 255, 230), font=get_font(22))
+        if "tech" in account_username:
+            cta_text = f"👉 Follow @{account_username} for Tech Updates"
+        elif "global" in account_username:
+            cta_text = f"👉 Follow @{account_username} for World News"
+        else:
+            cta_text = f"👉 Follow @{account_username} for Daily News"
+            
+        font_cta = get_font(22)
+        try:
+            cta_w = draw.textlength(cta_text, font=font_cta)
+        except:
+            cta_w = len(cta_text) * 12
+        cta_x = int((target_w - cta_w) / 2)
+        
+        draw.rectangle([cta_x - 30, 1680, cta_x + cta_w + 30, 1750], fill=(255, 255, 255, 30), outline=(255, 255, 255, 100), width=1)
+        draw.text((cta_x, 1695), cta_text, fill=(255, 255, 255, 230), font=font_cta)
             
         out = f"edited_{os.path.basename(image_path)}"
         canvas.convert('RGB').save(out, 'JPEG', quality=95)
+        
+        # Explicit cleanup to prevent memory/file descriptor leaks
+        bg_img.close()
+        overlay.close()
+        sharp_img.close()
+        border_layer.close()
+        canvas.close()
+        
+        print(f"  ✨ Template applied successfully. Output: {out}")
         return out
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"Error applying template: {e}")
         return image_path
 
@@ -244,7 +387,7 @@ def create_news_video(image_path, output_path="news_post.mp4", raw_text=""):
         import re
         from gtts import gTTS
         
-        print(f"Compiling video with embedded music and TTS...")
+        print(f"  🎬 Compiling video with embedded music and TTS...")
         if os.path.exists(output_path): os.remove(output_path)
         music_path = os.path.join(os.path.dirname(__file__), "chill-fm.mp3")
         
@@ -265,6 +408,7 @@ def create_news_video(image_path, output_path="news_post.mp4", raw_text=""):
             
             if clean_headline and clean_headline != "News Update":
                 try:
+                    print(f"  🎙️ Generating TTS audio for headline...")
                     tts = gTTS(text=clean_headline, lang='en', tld='co.uk')
                     tts_audio = f"tts_temp_{os.path.basename(image_path)}.mp3"
                     tts.save(tts_audio)
@@ -285,22 +429,23 @@ def create_news_video(image_path, output_path="news_post.mp4", raw_text=""):
                 '-stream_loop', '-1', '-i', music_path,
                 '-i', tts_audio,
                 '-filter_complex', f"[1:a]volume=0.2[bg];[2:a]volume=1.8[voice];[bg][voice]amix=inputs=2:duration=first:dropout_transition=2",
-                '-c:v', 'libx264', '-tune', 'stillimage',
+                '-c:v', 'libx264', '-preset', 'ultrafast', '-threads', '4', '-tune', 'stillimage',
                 '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p',
-                '-vf', f"zoompan=z='min(zoom+0.0015,1.5)':d={zoomd}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)',scale=1080:1920",
+                '-vf', 'scale=1080:1920,format=yuv420p',
                 '-t', duration, output_path
             ]
         else:
             cmd = [
                 'ffmpeg', '-y', '-loop', '1', '-i', image_path,
                 '-stream_loop', '-1', '-i', music_path,
-                '-c:v', 'libx264', '-tune', 'stillimage',
+                '-c:v', 'libx264', '-preset', 'ultrafast', '-threads', '4', '-tune', 'stillimage',
                 '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p',
-                '-vf', "zoompan=z='min(zoom+0.0015,1.5)':d=125:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)',scale=1080:1920",
+                '-vf', "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
                 '-shortest', '-t', '5', output_path
             ]
-            
+        print(f"  🎥 Running FFmpeg to render video...")
         r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"  ✅ Video rendered successfully. Output: {output_path}")
         
         if tts_audio:
             try: os.remove(tts_audio)
@@ -311,121 +456,92 @@ def create_news_video(image_path, output_path="news_post.mp4", raw_text=""):
         print(f"Error creating video: {e}")
         return None
 
-def post_to_instagram(message, video_path, img_path):
-    global ig_client
-    print(f"📤 Uploading video to Instagram...")
-    try:
-        client = get_ig_client()
-        if not client: return None
-        for attempt in range(1, 4):
-            try:
-                media = client.clip_upload(video_path, message, thumbnail=img_path)
-                print(f"✅ Posted Reel to Instagram! ID: {media.id}")
-                return media
-            except Exception as e_upload:
-                err_str = str(e_upload).lower()
-                print(f"⚠️ Upload attempt {attempt} failed ({e_upload}).")
-                if "login_required" in err_str:
-                    print("🔄 Session expired mid-upload. Wiping session and forcing re-login...")
-                    ig_client = None
-                    try: os.remove(SESSION_FILE)
-                    except: pass
-                    client = get_ig_client()
-                    if not client: return None
-                elif attempt < 3: 
-                    time.sleep(2 ** attempt)
+def post_to_instagram(message, video_path, img_path, account_key="main"):
+    env_suffix = ""
+    if account_key == "tech": env_suffix = "_TECH"
+    elif account_key == "global": env_suffix = "_GLOBAL"
+    
+    username = os.getenv(f'IG_USERNAME{env_suffix}')
+    password = os.getenv(f'IG_PASSWORD{env_suffix}')
+    session_id = os.getenv(f'IG_SESSIONID{env_suffix}')
+    
+    # Map 'main' to 'standard' for session file naming as per tests
+    if account_key == "main": account_key = "standard"
+    session_file = f'ig_session_{account_key}.json'
+    
+    if not username:
+        print(f"Account {account_key} not configured. Skipping.")
         return None
-    except Exception as e:
-        print(f"❌ Instagram upload error: {e}")
-        return None
+        
+    uploader = InstagramUploader(username, password, session_id, session_file)
+    return uploader.post_reel(message, video_path, img_path)
 
-def clean_and_format_caption(text, story_url=None):
-    if not text: return "Neon Bulletin News Update | @neon.bulletin\n\n#news #breakingnews #globalnews #neonbulletin #worldnews #currentaffairs #explorepage #viral #journalism #trending #internationalnews #dailynews #latestnews #newsupdate"
+def clean_and_format_caption(text, desc_text="", story_url=None, account_key="main"):
+    if account_key == "tech":
+        intro_text = "💻 Samar Tech Updates | @the.samar.tech"
+        follow_text = "@the.samar.tech"
+        tags = "#tech #ai #startups #innovation #technology #gadgets #cybersecurity #thesamartech"
+    elif account_key == "global":
+        intro_text = "🌍 Samar Global News | @the.samar.global"
+        follow_text = "@the.samar.global"
+        tags = "#worldnews #finance #economy #globalmarkets #geopolitics #international #thesamarglobal"
+    else:
+        intro_text = "🏛️ Samar Root Politics & News | @samar.root"
+        follow_text = "@samar.root"
+        tags = "#politics #breakingnews #currentaffairs #journalism #trending #newsupdate #samarroot"
+
+    if not text: return f"{intro_text}\n\n{tags}"
+    
     lines = text.split('\n')
-    cleaned = ["📡 Neon Bulletin News Update | @neon.bulletin 📡\n"]
+    cleaned = [f"{intro_text}\n"]
     for line in lines:
         if "READ FULL STORY" in line or "teds mordare" in line.lower(): continue
         line = " ".join([w for w in line.split() if not w.startswith("http")])
         if line.strip(): cleaned.append(line.strip())
+        
+    if desc_text:
+        cleaned.append(f"\n{desc_text}")
+        
     raw_caption = re.sub(r'\n{3,}', '\n\n', "\n".join(cleaned)).strip()
     if story_url: raw_caption += f"\n\n🔗 FULL STORY LINK:\n👉 {story_url}"
-    raw_caption += "\n\n🚨 WHAT DO YOU THINK? Drop your thoughts below! 👇\n📌 SAVE this post to stay updated.\n🔔 Follow @neon.bulletin for breaking news!\n\n#news #breakingnews #globalnews #neonbulletin #worldnews #currentaffairs #explorepage #viral #journalism #trending #internationalnews #dailynews #latestnews #newsupdate"
+    raw_caption += f"\n\n🚨 WHAT DO YOU THINK? Drop your thoughts below! 👇\n📌 SAVE this post to stay updated.\n🔔 Follow {follow_text} for breaking news!\n\n{tags}"
     return raw_caption
 
-def process_compilation(posts_group):
-    # posts_group: list of (pid, text, photo_url, story_url)
-    print(f"  🎬 Creating high-grade compilation reel with {len(posts_group)} stories...")
-    temp_dir = f"comp_temp_{int(time.time())}"
-    os.makedirs(temp_dir, exist_ok=True)
-    music_path = os.path.join(os.path.dirname(__file__), "chill-fm.mp3")
-    output_video = f"compilation_{posts_group[-1][0]}.mp4"
-    
-    try:
-        for idx, post in enumerate(posts_group):
-            pid, text, photo_url, story_url = post
-            raw_img = os.path.join(temp_dir, f"raw_{idx+1}.jpg")
-            if photo_url:
-                try:
-                    r = requests.get(photo_url, timeout=15)
-                    if r.status_code == 200:
-                        with open(raw_img, 'wb') as f: f.write(r.content)
-                except: pass
-            if not os.path.exists(raw_img) or os.path.getsize(raw_img) == 0:
-                create_default_bg(raw_img)
-            edited = apply_news_template(raw_img, text)
-            shutil.move(edited, os.path.join(temp_dir, f"img_{idx+1}.jpg"))
-            
-        duration = len(posts_group) * 5
-        cmd = [
-            'ffmpeg', '-y', '-framerate', '1/5', 
-            '-i', os.path.join(temp_dir, 'img_%d.jpg'),
-            '-stream_loop', '-1', '-i', music_path,
-            '-c:v', 'libx264', '-tune', 'stillimage',
-            '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p',
-            '-vf', 'scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2',
-            '-shortest', '-t', str(duration), output_video
-        ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        if os.path.exists(output_video):
-            caption = "🚨 GLOBAL PULSE: Top Breaking Stories You Missed 🌍👇\n\n"
-            for i, p in enumerate(posts_group):
-                clean = re.sub(r'(?i)read\s+full(\s+story)?', '', p[1])
-                clean = re.sub(r'(?i)related:\s*join.*', '', clean)
-                clean = re.sub(r'http\S+', '', clean)
-                caption += f"{i+1}️⃣ {clean.strip()[:150]}...\n\n"
-            caption += "🔗 Read the full deep-dive stories at the link in our bio!\n\n👇 Which of these global shifts will have the biggest impact? Drop your thoughts!\n\n#news #breakingnews #globalnews #neonbulletin #worldnews #currentaffairs #explorepage #viral #journalism #trending #internationalnews #dailynews #latestnews #newsupdate"
-            
-            thumb = os.path.join(temp_dir, 'img_1.jpg')
-            res = post_to_instagram(caption, output_video, thumb)
-            return res is not None
-        return False
-    except Exception as e:
-        print(f"Compilation error: {e}")
-        return False
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        if os.path.exists(output_video): os.remove(output_video)
 
-def process_individual(post):
-    pid, text, photo_url, story_url = post
-    print(f"  ⏭ Processing individual low-grade post #{pid}...")
+
+def process_individual(post, account_key="main"):
+    pid, text, desc_text, photo_url, story_url = post[:5]
+    print(f"  ⏭ Processing individual low-grade post #{pid} for {account_key}...")
     img_path = f"temp_{pid}.jpg"
     try:
         if photo_url:
+            print(f"  📥 Downloading article image from RSS feed...")
             try:
-                r = requests.get(photo_url, timeout=15)
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                r = requests.get(photo_url, headers=headers, timeout=15)
                 if r.status_code == 200:
                     with open(img_path, 'wb') as f: f.write(r.content)
-            except: pass
+                else:
+                    print(f"  ⚠️ Image download failed with status {r.status_code}")
+            except Exception as e: 
+                print(f"  ⚠️ Image download exception: {e}")
         if not os.path.exists(img_path) or os.path.getsize(img_path) == 0:
+            print(f"  ⚠️ No image found, generating default background.")
             create_default_bg(img_path)
             
-        edited = apply_news_template(img_path, text)
+        env_suffix = ""
+        if account_key == "tech": env_suffix = "_TECH"
+        elif account_key == "global": env_suffix = "_GLOBAL"
+        target_username = os.getenv(f'IG_USERNAME{env_suffix}', 'neon.bulletin')
+            
+        edited = apply_news_template(img_path, text, account_username=target_username)
         video = create_news_video(edited, f"news_video_{pid}.mp4", text)
+        
         if video:
-            cap = clean_and_format_caption(text, story_url)
-            res = post_to_instagram(cap, video, edited)
+            print(f"  ✍️ Formatting caption and tags...")
+            cap = clean_and_format_caption(text, desc_text=desc_text, story_url=story_url, account_key=account_key)
+            print(f"  🚀 Starting Instagram upload for {account_key}...")
+            res = post_to_instagram(cap, video, edited, account_key=account_key)
             return res is not None
         return False
     finally:
@@ -434,134 +550,74 @@ def process_individual(post):
                 try: os.remove(fp)
                 except: pass
 
-def _fetch_telegram_page(url, proxies, timeout=20):
-    """Try fetching a Telegram page with multi-domain fallback and retries."""
-    # Extract the path from the URL so we can try alternate domains
-    parsed = urlparse(url)
-    path = parsed.path
-    if parsed.query:
-        path += f"?{parsed.query}"
+def get_recent_posts(source, processed_ids, limit=200):
+    import xml.etree.ElementTree as ET
+    import hashlib
+    import concurrent.futures
     
-    domains = ["t.me", "telegram.me"]
-    last_error = None
+    feeds = [
+        "http://feeds.bbci.co.uk/news/rss.xml",
+        "http://feeds.bbci.co.uk/news/technology/rss.xml",
+        "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
+        "https://techcrunch.com/feed/"
+    ]
     
-    for domain in domains:
-        attempt_url = f"https://{domain}{path}"
-        for attempt in range(1, 4):  # 3 retries per domain
-            try:
-                r = requests.get(attempt_url, timeout=timeout, proxies=proxies, 
-                                 headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"})
-                if r.status_code == 200:
-                    return r
-                elif r.status_code == 429:
-                    wait = min(2 ** attempt * 5, 60)
-                    print(f"  ⏳ Rate-limited by {domain} (429). Waiting {wait}s...")
-                    time.sleep(wait)
-                else:
-                    print(f"  ⚠️ {domain} returned HTTP {r.status_code}")
-                    break  # Try next domain
-            except requests.exceptions.ProxyError as e:
-                print(f"  ❌ Proxy error connecting to {domain}: {e}")
-                last_error = e
-                break  # Proxy is broken, no point retrying
-            except (requests.exceptions.ConnectTimeout, requests.exceptions.ConnectionError) as e:
-                last_error = e
-                if attempt < 3:
-                    wait = 2 ** attempt
-                    print(f"  ⚠️ {domain} connection failed (attempt {attempt}/3). Retrying in {wait}s...")
-                    time.sleep(wait)
-                else:
-                    print(f"  ❌ {domain} unreachable after 3 attempts.")
-            except requests.exceptions.RequestException as e:
-                last_error = e
-                print(f"  ❌ Request error for {domain}: {e}")
-                break
-    
-    # All domains failed — print diagnostic
-    if last_error:
-        err_name = type(last_error).__name__
-        if "Timeout" in err_name or "Connection" in err_name:
-            print(f"\n{'='*60}")
-            print(f"  🚫 TELEGRAM IS BLOCKED ON THIS NETWORK")
-            print(f"  All Telegram domains are unreachable.")
-            print(f"  Error: {err_name}")
-            print(f"")
-            print(f"  FIX: Set TG_PROXY in your .env file:")
-            print(f"    TG_PROXY=socks5://your-proxy:port")
-            print(f"    TG_PROXY=http://your-proxy:port")
-            print(f"{'='*60}\n")
-    return None
-
-def get_recent_posts(username, processed_ids, limit=200):
-    current_url = f"https://t.me/s/{username}"
     all_posts = []
-    pages = 0
-    proxies = {"http": TG_PROXY, "https": TG_PROXY} if TG_PROXY else None
+    print(f"  📡 Starting to fetch up to {limit} posts from {len(feeds)} direct RSS feeds concurrently...")
     
-    if TG_PROXY:
-        print(f"🌐 Routing Telegram traffic through proxy: {TG_PROXY}")
-    
-    consecutive_failures = 0
-    max_consecutive_failures = 3
-    
-    while pages < 10 and len(all_posts) < limit:
-        pages += 1
-        
-        r = _fetch_telegram_page(current_url, proxies)
-        if r is None:
-            consecutive_failures += 1
-            if consecutive_failures >= max_consecutive_failures:
-                print(f"  ❌ {max_consecutive_failures} consecutive page failures. Stopping pagination.")
+    def fetch_feed(feed_url):
+        feed_posts = []
+        print(f"    📄 Fetching feed: {feed_url}...")
+        try:
+            r = requests.get(feed_url, timeout=15, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
+            if r.status_code == 200:
+                xml_text = re.sub(r'\sxmlns="[^"]+"', '', r.text)
+                root = ET.fromstring(xml_text)
+                for item in root.findall('.//item'):
+                    title = item.find('title')
+                    link = item.find('link')
+                    description = item.find('description')
+                    
+                    if title is None or link is None: continue
+                    text = title.text.strip()
+                    story_url = link.text.strip()
+                    pid = int(hashlib.md5(story_url.encode()).hexdigest(), 16) % (10**9)
+                    
+                    if pid in processed_ids: continue
+                    
+                    photo_url = None
+                    media_content = item.find('.//{http://search.yahoo.com/mrss/}content')
+                    if media_content is not None and 'url' in media_content.attrib:
+                        photo_url = media_content.attrib['url']
+                    else:
+                        media_thumb = item.find('.//{http://search.yahoo.com/mrss/}thumbnail')
+                        if media_thumb is not None and 'url' in media_thumb.attrib:
+                            photo_url = media_thumb.attrib['url']
+                            
+                    desc_text = ""
+                    if description is not None and description.text:
+                        img_match = re.search(r'<img[^>]+src=["\'](.*?)["\']', description.text)
+                        if not photo_url and img_match: photo_url = img_match.group(1)
+                        desc_text = re.sub(r'<[^>]+>', '', description.text).strip()
+                            
+                    if len(text.split()) < 4 and not desc_text: continue
+                    feed_posts.append((pid, text, desc_text, photo_url, story_url))
+                    if len(feed_posts) >= limit: break
+            else:
+                print(f"  ⚠️ Feed {feed_url} returned HTTP {r.status_code}")
+        except Exception as e:
+            print(f"  ❌ Error fetching {feed_url}: {e}")
+        return feed_posts
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        results = executor.map(fetch_feed, feeds)
+        for posts in results:
+            all_posts.extend(posts)
+            if len(all_posts) >= limit:
+                all_posts = all_posts[:limit]
                 break
-            continue
-        
-        consecutive_failures = 0  # Reset on success
-        html = r.text
             
-        blocks = html.split('<div class="tgme_widget_message text_not_supported_wrap js-widget_message"')[1:]
-        if not blocks: blocks = html.split('tgme_widget_message ')[1:]
-        if not blocks: break
-        
-        min_pid = float('inf')
-        for block in reversed(blocks):
-            m = re.search(r'data-post="[^/]+/(\d+)"', block)
-            if not m: continue
-            pid = int(m.group(1))
-            min_pid = min(min_pid, pid)
-            
-            if pid in processed_ids: continue
-            
-            text, story_url, photo_url = "News Update", None, None
-            ts = block.find('class="tgme_widget_message_text')
-            if ts != -1:
-                te = block.find('>', ts)
-                de = block.find('</div>', te)
-                if te != -1 and de != -1:
-                    raw = block[te + 1: de]
-                    urls = re.findall(r'href="([^"]+)"', raw)
-                    for u in urls:
-                        if "t.me" not in u and "telegram.me" not in u:
-                            story_url = u
-                            break
-                    raw = raw.replace('<br>', ' ').replace('<br/>', ' ')
-                    import html
-                    text = html.unescape(re.sub(r'<[^<]+?>', '', raw).strip())
-            ps = block.find('tgme_widget_message_photo_wrap')
-            vs = block.find('tgme_widget_message_video_thumb')
-            if ps != -1:
-                pm = re.search(r"background-image:url\('([^']+)'\)", block[ps:ps+1000])
-                if pm: photo_url = pm.group(1)
-            elif vs != -1:
-                pm = re.search(r"background-image:url\('([^']+)'\)", block[vs:vs+1000])
-                if pm: photo_url = pm.group(1)
-                
-            if text and "News Update" not in text:
-                all_posts.append((pid, text, photo_url, story_url))
-                if len(all_posts) >= limit: break
-                
-        current_url = f"https://t.me/s/{username}?before={min_pid}"
-        time.sleep(1)
-        
+    # Sort by ID (arbitrary but consistent)
     return sorted(all_posts, key=lambda x: x[0])
 
 def main():
@@ -578,70 +634,104 @@ def main():
             add_processed_ids(range(1, lid + 1))
         except: pass
 
+    processed_hl = get_processed_headlines()
+    processed_ids = get_processed_ids()
+    posts_today = {"main": 0, "tech": 0, "global": 0}
+    next_ready = {"main": 0, "tech": 0, "global": 0}
+    last_reset_day = datetime.now(timezone.utc).day
+
     while True:
         try:
-            processed = get_processed_ids()
+            print(f"\n🔄 Polling RSS Feeds for new posts...")
+            current_day = datetime.now(timezone.utc).day
+            if current_day != last_reset_day:
+                posts_today = {"main": 0, "tech": 0, "global": 0}
+                last_reset_day = current_day
+                
             # Fetch a deep history (up to 200 posts) so no high-grade news is missed
-            new_posts = get_recent_posts(SOURCE_CHANNEL, processed, limit=200)
+            all_recent = get_recent_posts(SOURCE_CHANNEL, processed_ids, limit=200)
+            print(f"🔍 Checking {len(all_recent)} recent posts for duplicate headlines...")
+            
+            # Filter specifically for unprocessed unique headlines
+            new_posts = []
+            for p in all_recent:
+                # Clean headline using exact same logic as apply_news_template
+                source_match = re.search(r'(?i)(source:\s*[^\n]+)', p[1])
+                headline_base = p[1]
+                if source_match: headline_base = headline_base.replace(source_match.group(1), "")
+                headline_base = re.sub(r'(?i)read\s+full(\s+story)?', '', headline_base)
+                headline_base = re.sub(r'(?i)related:\s*join.*', '', headline_base)
+                headline_base = " ".join(w for w in headline_base.split() if not w.startswith("http") and not w.startswith("@"))
+                clean_hl = re.sub(r'[\U00010000-\U0010ffff]', '', headline_base)
+                clean_hl = " ".join(clean_hl.split()).strip()
+                clean_hl = re.sub(r'(?i)^\s*breaking\s+news\s*', '', clean_hl).strip()
+                clean_hl = clean_hl[:180] or "News Update"
+                
+                norm_hl = normalize_headline(clean_hl)
+                if norm_hl in processed_hl:
+                    # Already posted this headline, mark message ID as processed
+                    add_processed_ids([p[0]])
+                    continue
+                new_posts.append((p[0], p[1], p[2], p[3], p[4], norm_hl))
             
             if new_posts:
-                print(f"\n📬 Fetched {len(new_posts)} unprocessed post(s)!")
+                print(f"\n📬 Found {len(new_posts)} unprocessed post(s). Routing...")
+                now = time.time()
                 
-                high_grade = []
-                low_grade_all = []
+                # Implement Strategy B: Category Routing
                 for p in new_posts:
-                    if any(s in p[1] for s in HIGH_GRADE_SOURCES):
-                        high_grade.append(p)
+                    text_lower = p[1].lower()
+                    
+                    # Routing logic based on keywords or sources
+                    if any(kw in text_lower for kw in ["tech", "ai", "apple", "google", "startup", "crypto", "gadget", "software", "cyber"]):
+                        target_account = "tech"
+                    elif any(kw in text_lower for kw in ["global", "world", "market", "finance", "war", "economy", "reuters", "bloomberg", "international"]):
+                        target_account = "global"
                     else:
-                        low_grade_all.append(p)
-                
-                low_grade = low_grade_all
-                # If there's a massive backlog, rescue ALL high-grade news, but drop old low-grade news
-                if len(new_posts) > 15:
-                    print(f"⚠️ Massive backlog detected ({len(new_posts)} posts).")
-                    low_grade = low_grade_all[-5:] # Keep only the 5 newest low-grade posts
-                    skipped_low = low_grade_all[:-5]
-                    
-                    if skipped_low:
-                        add_processed_ids([p[0] for p in skipped_low])
-                        print(f"  🗑️ Purged {len(skipped_low)} old low-grade posts to avoid spam blocks.")
-                    print(f"  💎 Rescued {len(high_grade)} high-grade stories from the backlog for compilation!")
+                        target_account = "main" # main handles politics and general news
                         
-                # 1. Process High Grade as Compilations (Groups of 3)
-                for i in range(0, len(high_grade), 3):
-                    group = high_grade[i:i+3]
-                    success = process_compilation(group)
-                    if not success:
-                        print("  ❌ Compilation upload failed (likely action block). Pausing.")
-                        break
-                    # Mark all as processed
-                    add_processed_ids([p[0] for p in group])
-                    print(f"  ✅ Uploaded compilation! Marked {len(group)} posts as processed.")
-                    
-                    wait_time = random.randint(600, 1800)
-                    print(f"  ⏳ Mandatory cooldown: Sleeping {wait_time // 60}m to prevent Sentry blocks...")
-                    time.sleep(wait_time)
-                
-                # 2. Process Low Grade Individually
-                for p in low_grade:
+                    quota = 50 if target_account == "main" else 30
+                    if posts_today[target_account] >= quota:
+                        # Try fallback if main is full
+                        if target_account == "main" and posts_today["global"] < 30:
+                            target_account = "global"
+                        else:
+                            continue
+                            
+                    # Check if this account is currently on cooldown
+                    if next_ready[target_account] > now:
+                        continue # Skip this post for now, it will be picked up next poll
+                            
                     # Double check we haven't already processed it just in case
-                    if p[0] in get_processed_ids(): continue
+                    if p[0] in processed_ids: continue
+                    if p[5] in processed_hl:
+                        add_processed_ids([p[0]])
+                        processed_ids.add(p[0])
+                        continue
                     
-                    success = process_individual(p)
-                    if not success:
-                        print(f"  ❌ Post #{p[0]} failed. Pausing.")
-                        break
-                    
-                    add_processed_ids([p[0]])
-                    print(f"  ✅ Uploaded post #{p[0]}.")
-                    
-                    wait_time = random.randint(300, 1200)
-                    print(f"  ⏳ Mandatory cooldown: Sleeping {wait_time // 60}m to prevent Sentry blocks...")
-                    time.sleep(wait_time)
+                    print(f"  ⏭ Routing post #{p[0]} to [{target_account.upper()}] account...")
+                    success = process_individual(p, account_key=target_account)
+                    if success:
+                        add_processed_ids([p[0]])
+                        processed_ids.add(p[0])
+                        add_processed_headline(p[5])
+                        processed_hl.add(p[5])
+                        posts_today[target_account] += 1
+                        print(f"  ✅ Uploaded post #{p[0]}. ({posts_today[target_account]}/{quota} today for {target_account})")
+                        
+                        wait_time = random.randint(180, 300) if target_account == "main" else random.randint(240, 420)
+                        print(f"  ⏳ Setting [{target_account.upper()}] cooldown for {wait_time // 60}m {wait_time % 60}s...")
+                        next_ready[target_account] = time.time() + wait_time
+                        now = time.time()
+                    else:
+                        print(f"  ❌ Post #{p[0]} failed. Pausing this account.")
+                        next_ready[target_account] = time.time() + 300 # 5 min penalty
+                        now = time.time()
                     
         except Exception as e:
             print(f"Polling error: {e}")
             
+        print(f"💤 Polling sleep: Waiting 60s for next check...")
         time.sleep(60)
 
 if __name__ == "__main__":

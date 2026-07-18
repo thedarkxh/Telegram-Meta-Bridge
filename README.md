@@ -25,7 +25,7 @@
 | **Telegram Scraper** | Pulls recent posts from a public Telegram channel without needing an API key. |
 | **Image Processing** | Resizes, blurs, and overlays the original image on a 1080×1920 canvas with premium borders. |
 | **Video Generation** | Creates a 5‑second silent video (or with music) ready for Instagram Reels. |
-| **Music Search & Upload** | Searches for "calming lofi" tracks, retries on 429 errors, and mixes locally when needed. |
+| **Music Search & Upload** | Mixes a local chill-lofi track using ffmpeg before upload to bypass Instagram API errors. |
 | **Instagram Session Management** | Saves `ig_session.json` for reuse, handles login challenges via `IG_CHALLENGE_CODE`. |
 | **Professional Captions** | Adds branding, removes raw URLs, includes a clickable story link, and appends lively footer & hashtags. |
 | **Extensible** | Easy to swap music queries, change branding, or adapt to other platforms. |
@@ -82,14 +82,14 @@ The bridge will:
 
 ## Customisation
 
-- **Music Query**: Change the search term in `post_to_instagram` (`client.search_music("calming lofi")`).
+- **Music Query**: Change the background music by replacing the local `chill-fm.mp3` file.
 - **Branding**: Edit `clean_and_format_caption` to modify the intro, footer, or hashtags.
 - **Visual Style**: Adjust colors, gradients, or border thickness in `apply_news_template`.
 
 ## Troubleshooting
 
 - **Login Challenges**: If Instagram asks for a verification code, set `IG_CHALLENGE_CODE` in `.env` or provide it when prompted.
-- **Rate‑Limit (429) on Music**: The bridge already retries three times with exponential back‑off. If failures persist, consider increasing `max_search_retries` in `post_to_instagram`.
+- **Rate‑Limit (429) on Music**: We mix a local track with ffmpeg to avoid Instagram's restrictive API rate limits entirely.
 - **FFmpeg Errors**: Ensure the system `ffmpeg` binary is in your `$PATH`.
 
 ## License
